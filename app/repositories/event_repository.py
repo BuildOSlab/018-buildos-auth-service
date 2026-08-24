@@ -18,6 +18,7 @@ class EventRepository:
     def __init__(self, db: Session) -> None:
         self.db = db
 
+    # pylint: disable=too-many-arguments
     def create_auth_event(
         self,
         *,
@@ -30,6 +31,7 @@ class EventRepository:
         user_agent: str | None = None,
         metadata_json: str | None = None,
     ) -> AuthEvent:
+        """Create and persist an authentication event."""
         event = AuthEvent(
             user_id=user_id,
             context_type=context_type,
@@ -47,6 +49,7 @@ class EventRepository:
 
         return event
 
+    # pylint: disable=too-many-arguments
     def create_security_event(
         self,
         *,
@@ -60,6 +63,7 @@ class EventRepository:
         ip_address: str | None = None,
         user_agent: str | None = None,
     ) -> SecurityEvent:
+        """Create and persist a security event."""
         event = SecurityEvent(
             user_id=user_id,
             context_type=context_type,
@@ -82,6 +86,7 @@ class EventRepository:
         self,
         user_id: UUID,
     ) -> list[AuthEvent]:
+        """Return authentication events belonging to a user."""
         stmt = (
             select(AuthEvent)
             .where(AuthEvent.user_id == user_id)
@@ -94,6 +99,7 @@ class EventRepository:
         self,
         user_id: UUID,
     ) -> list[SecurityEvent]:
+        """Return security events belonging to a user."""
         stmt = (
             select(SecurityEvent)
             .where(SecurityEvent.user_id == user_id)
@@ -106,6 +112,7 @@ class EventRepository:
         self,
         event_type: str,
     ) -> list[AuthEvent]:
+        """Return authentication events matching an event type."""
         stmt = (
             select(AuthEvent)
             .where(AuthEvent.event_type == event_type)
@@ -118,6 +125,7 @@ class EventRepository:
         self,
         event_type: str,
     ) -> list[SecurityEvent]:
+        """Return security events matching an event type."""
         stmt = (
             select(SecurityEvent)
             .where(SecurityEvent.event_type == event_type)

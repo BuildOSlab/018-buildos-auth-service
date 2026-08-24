@@ -26,6 +26,7 @@ class PasswordResetRepository:
         expires_at: datetime,
         requested_ip: str | None = None,
     ) -> PasswordReset:
+        """Create and persist a password reset record."""
         reset = PasswordReset(
             user_id=user_id,
             token_hash=token_hash,
@@ -43,6 +44,7 @@ class PasswordResetRepository:
         self,
         token_hash: str,
     ) -> PasswordReset | None:
+        """Return a password reset record matching the token hash."""
         stmt = select(PasswordReset).where(
             PasswordReset.token_hash == token_hash
         )
@@ -54,6 +56,7 @@ class PasswordResetRepository:
         token_hash: str,
         now: datetime,
     ) -> PasswordReset | None:
+        """Return an unused and unexpired reset record by token hash."""
         stmt = select(PasswordReset).where(
             PasswordReset.token_hash == token_hash,
             PasswordReset.is_used.is_(False),
@@ -67,6 +70,7 @@ class PasswordResetRepository:
         *,
         user_id: UUID,
     ) -> PasswordReset | None:
+        """Return the most recently created reset record for a user."""
         stmt = (
             select(PasswordReset)
             .where(PasswordReset.user_id == user_id)
@@ -82,6 +86,7 @@ class PasswordResetRepository:
         *,
         used_at: datetime,
     ) -> PasswordReset:
+        """Mark a password reset record as used."""
         reset.is_used = True
         reset.used_at = used_at
 

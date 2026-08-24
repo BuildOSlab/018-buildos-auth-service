@@ -18,7 +18,7 @@ class TokenRepository:
     def __init__(self, db: Session) -> None:
         self.db = db
 
-    def create(
+    def create(  # pylint: disable=too-many-arguments
         self,
         *,
         user_id: UUID,
@@ -28,6 +28,7 @@ class TokenRepository:
         organization_id: UUID | None = None,
         membership_id: UUID | None = None,
     ) -> RefreshToken:
+        """Create and persist a refresh token."""
         token = RefreshToken(
             user_id=user_id,
             token_hash=token_hash,
@@ -47,8 +48,9 @@ class TokenRepository:
         self,
         token_hash: str,
     ) -> RefreshToken | None:
+        """Return a refresh token by its token hash."""
         stmt = select(RefreshToken).where(
-            RefreshToken.token_hash == token_hash
+            RefreshToken.token_hash == token_hash,
         )
 
         return self.db.scalar(stmt)
@@ -59,6 +61,7 @@ class TokenRepository:
         token_hash: str,
         now: datetime,
     ) -> RefreshToken | None:
+        """Return an active, non-expired refresh token by hash."""
         stmt = select(RefreshToken).where(
             RefreshToken.token_hash == token_hash,
             RefreshToken.is_revoked.is_(False),
@@ -71,14 +74,33 @@ class TokenRepository:
         self,
         *,
         user_id: UUID,
+        context_type: str | None = None,
+        organization_id: UUID | None = None,
+        membership_id: UUID | None = None,
     ) -> list[RefreshToken]:
-        stmt = (
-            select(RefreshToken)
-            .where(
-                RefreshToken.user_id == user_id,
-                RefreshToken.is_revoked.is_(False),
+        """Return active refresh tokens matching the requested scope."""
+        stmt = select(RefreshToken).where(
+            RefreshToken.user_id == user_id,
+            RefreshToken.is_revoked.is_(False),
+        )
+
+        if context_type is not None:
+            stmt = stmt.where(
+                RefreshToken.context_type == context_type,
             )
-            .order_by(RefreshToken.created_at.desc())
+
+        if organization_id is not None:
+            stmt = stmt.where(
+                RefreshToken.organization_id == organization_id,
+            )
+
+        if membership_id is not None:
+            stmt = stmt.where(
+                RefreshToken.membership_id == membership_id,
+            )
+
+        stmt = stmt.order_by(
+            RefreshToken.created_at.desc(),
         )
 
         return list(self.db.scalars(stmt).all())
@@ -89,6 +111,7 @@ class TokenRepository:
         *,
         revoked_at: datetime,
     ) -> RefreshToken:
+        """Revoke a single refresh token."""
         token.is_revoked = True
         token.revoked_at = revoked_at
 
@@ -102,8 +125,32 @@ class TokenRepository:
         *,
         user_id: UUID,
         revoked_at: datetime,
+        context_type: str | None = None,
+        organization_id: UUID | None = None,
+        membership_id: UUID | None = None,
     ) -> int:
-        tokens = self.get_active_by_user(user_id=user_id)
+        """Revoke active refresh tokens matching the requested scope."""
+        stmt = select(RefreshToken).where(
+            RefreshToken.user_id == user_id,
+            RefreshToken.is_revoked.is_(False),
+        )
+
+        if context_type is not None:
+            stmt = stmt.where(
+                RefreshToken.context_type == context_type,
+            )
+
+        if organization_id is not None:
+            stmt = stmt.where(
+                RefreshToken.organization_id == organization_id,
+            )
+
+        if membership_id is not None:
+            stmt = stmt.where(
+                RefreshToken.membership_id == membership_id,
+            )
+
+        tokens = list(self.db.scalars(stmt).all())
 
         for token in tokens:
             token.is_revoked = True
@@ -119,6 +166,7 @@ class TokenRepository:
         *,
         used_at: datetime,
     ) -> RefreshToken:
+        """Record the latest usage time for a refresh token."""
         token.last_used_at = used_at
 
         self.db.flush()
@@ -133,6 +181,7 @@ class TokenRepository:
         replacement_token_id: UUID,
         revoked_at: datetime,
     ) -> RefreshToken:
+        """Revoke a token and link it to its replacement token."""
         token.is_revoked = True
         token.revoked_at = revoked_at
         token.replaced_by_token_id = replacement_token_id
