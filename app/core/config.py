@@ -1,0 +1,62 @@
+"""
+BuildOS Auth Service
+Application Configuration
+"""
+
+from functools import lru_cache
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    """
+    Runtime configuration for the BuildOS Auth Service.
+    """
+
+    # Application
+    service_name: str = "buildos-auth-service"
+    environment: str = "development"
+    debug: bool = False
+
+    # Database
+    database_url: str
+
+    # JWT
+    jwt_secret_key: str
+    jwt_algorithm: str = "HS256"
+    jwt_issuer: str = "buildos-auth-service"
+    jwt_audience: str = "buildos-api"
+
+    access_token_expire_minutes: int = 15
+    refresh_token_expire_days: int = 30
+
+    # Password security
+    password_hash_time_cost: int = 3
+    password_hash_memory_cost: int = 65536
+    password_hash_parallelism: int = 4
+
+    # Authentication security
+    max_failed_login_attempts: int = 5
+    login_lockout_minutes: int = 15
+    login_rate_limit_window_minutes: int = 15
+
+    # Password reset
+    password_reset_expire_minutes: int = 30
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+    )
+
+
+@lru_cache
+def get_settings() -> Settings:
+    """
+    Return the cached application settings.
+    """
+    return Settings()  # type: ignore[call-arg]
+
+
+settings = get_settings()
