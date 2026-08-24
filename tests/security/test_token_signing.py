@@ -10,7 +10,7 @@ import jwt
 import pytest
 
 from app.core.config import get_settings
-from app.core.constants import TOKEN_TYPE_REFRESH
+from app.core.constants import TOKEN_TYPE_ACCESS, TOKEN_TYPE_REFRESH
 from app.core.exceptions import ExpiredTokenError, InvalidTokenError
 from app.security.token_signing import create_access_token, create_refresh_token
 from app.security.token_validation import validate_access_token, validate_refresh_token
@@ -217,3 +217,115 @@ def test_create_refresh_token_context_type_explicit() -> None:
     validated = validate_refresh_token(token)
 
     assert validated["context_type"] == "ORGANIZATION"
+
+
+def test_create_access_token_basic() -> None:
+    """Test that an access token can be created and decoded."""
+    user_id = UUID("12345678-1234-1234-1234-123456789012")
+
+    token = create_access_token(user_id=user_id)
+
+    assert token
+
+    payload = jwt.decode(
+        token,
+        options={"verify_signature": False},
+    )
+
+    assert payload["sub"] == str(user_id)
+    assert payload["token_type"] == TOKEN_TYPE_ACCESS
+
+
+def test_validate_access_token_valid() -> None:
+    """Test that a valid access token can be validated."""
+    user_id = UUID("12345678-1234-1234-1234-123456789012")
+
+    token = create_access_token(user_id=user_id)
+
+    payload = validate_access_token(token)
+
+    assert payload["sub"] == str(user_id)
+    assert payload["token_type"] == TOKEN_TYPE_ACCESS
+
+
+def test_create_access_token_issuer_audience() -> None:
+    """Test that access tokens contain the configured issuer and audience."""
+    settings = get_settings()
+
+    token = create_access_token(
+        user_id=UUID("12345678-1234-1234-1234-123456789012"),
+    )
+
+    payload = validate_access_token(token)
+
+    assert payload["iss"] == settings.jwt_issuer
+    assert payload["aud"] == settings.jwt_audience
+
+
+def test_create_access_token_context_type_defaults_to_personal() -> None:
+    """Test that access tokens default to personal context."""
+    token = create_access_token(
+        user_id=UUID("12345678-1234-1234-1234-123456789012"),
+    )
+
+    payload = validate_access_token(token)
+
+    assert payload.get("context_type") == "PERSONAL"
+
+
+def test_create_access_token_jti_exists() -> None:
+    """Test that access tokens contain a JWT ID."""
+    token = create_access_token(
+        user_id=UUID("12345678-1234-1234-1234-123456789012"),
+    )
+
+    payload = validate_access_token(token)
+
+    assert "jti" in payload
+    assert isinstance(payload["jti"], str)
+
+
+def test_create_access_token_organization_context() -> None:
+    """Test access-token organization context claims."""
+    user_id = UUID("12345678-1234-1234-1234-123456789012")
+    organization_id = UUID("87654321-4321-4321-4321-210987654321")
+    membership_id = UUID("11111111-1111-1111-1111-111111111111")
+
+    token = create_access_token(
+        user_id=user_id,
+        organization_id=organization_id,
+        membership_id=membership_id,
+        context_type="ORGANIZATION",
+    )
+
+    payload = validate_access_token(token)
+
+    assert payload["context_type"] == "ORGANIZATION"
+    assert payload["organization_id"] == str(organization_id)
+    assert payload["membership_id"] == str(membership_id)
+
+
+def test_validate_access_token_malformed() -> None:
+    """Test that malformed access tokens are rejected."""
+    with pytest.raises(InvalidTokenError):
+        validate_access_token("not.a.jwt.token")
+
+
+def test_validate_access_token_expired() -> None:
+    """Test that expired access tokens are rejected."""
+    settings = get_settings()
+
+    past = datetime.now(UTC) - timedelta(
+        minutes=settings.access_token_expire_minutes + 1,
+    )
+
+    token = create_access_token(
+        user_id=UUID("12345678-1234-1234-1234-123456789012"),
+        now=past,
+    )
+
+    with pytest.raises(
+        ExpiredTokenError,
+        match="Access token has expired.",
+    ):
+        validate_access_token(token)
