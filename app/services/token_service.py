@@ -286,6 +286,8 @@ class TokenService:
         *,
         user_id: UUID,
         context_type: str | None = None,
+        organization_id: UUID | None = None,
+        membership_id: UUID | None = None,
         revoked_at: datetime | None = None,
     ) -> int:
         """
@@ -299,8 +301,10 @@ class TokenService:
         return self.token_repository.revoke_all_for_user(
             user_id=user_id,
             revoked_at=current_time,
+            context_type=context_type,
+            organization_id=organization_id,
+            membership_id=membership_id,
         )
-
     def _get_replacement_token_id(
         self,
         refresh_token: str,

@@ -3,7 +3,8 @@ BuildOS Auth Service
 Login Attempt Repository
 """
 
-from dataclasses import dataclass
+# pylint: disable=too-many-arguments
+
 from datetime import datetime
 from uuid import UUID
 
@@ -14,24 +15,10 @@ from sqlalchemy.sql.functions import count
 from app.models.login_attempt import LoginAttempt
 
 
-@dataclass(frozen=True)
-class LoginAttemptOptions:
-    """Optional configuration for creating a login attempt."""
-
-    user_id: UUID | None = None
-    context_type: str = "PERSONAL"
-    organization_id: UUID | None = None
-    membership_id: UUID | None = None
-    ip_address: str | None = None
-    user_agent: str | None = None
-    failure_reason: str | None = None
-
-
 class LoginAttemptRepository:
     """Database access for authentication attempts."""
 
     def __init__(self, db: Session) -> None:
-        """Initialize the repository with a database session."""
         self.db = db
 
     def create(
@@ -39,21 +26,25 @@ class LoginAttemptRepository:
         *,
         identifier: str,
         successful: bool,
-        options: LoginAttemptOptions | None = None,
+        user_id: UUID | None = None,
+        context_type: str = "PERSONAL",
+        organization_id: UUID | None = None,
+        membership_id: UUID | None = None,
+        ip_address: str | None = None,
+        user_agent: str | None = None,
+        failure_reason: str | None = None,
     ) -> LoginAttempt:
         """Create and persist a login attempt."""
-        options = options or LoginAttemptOptions()
-
         attempt = LoginAttempt(
             identifier=identifier,
             successful=successful,
-            user_id=options.user_id,
-            context_type=options.context_type,
-            organization_id=options.organization_id,
-            membership_id=options.membership_id,
-            ip_address=options.ip_address,
-            user_agent=options.user_agent,
-            failure_reason=options.failure_reason,
+            user_id=user_id,
+            context_type=context_type,
+            organization_id=organization_id,
+            membership_id=membership_id,
+            ip_address=ip_address,
+            user_agent=user_agent,
+            failure_reason=failure_reason,
         )
 
         self.db.add(attempt)

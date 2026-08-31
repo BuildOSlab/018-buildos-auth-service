@@ -20,6 +20,19 @@ from app.security.rate_limiting import (
 
 
 @dataclass(frozen=True)
+class AuthenticationContext:
+    """
+    Authentication request context.
+    """
+
+    context_type: str = "PERSONAL"
+    organization_id: UUID | None = None
+    membership_id: UUID | None = None
+    ip_address: str | None = None
+    user_agent: str | None = None
+
+
+@dataclass(frozen=True)
 class AuthenticationResult:
     """
     Result of an authentication attempt.
@@ -69,17 +82,21 @@ class AuthenticationService:
 
         current_time = now or datetime.now(UTC)
 
+        context = AuthenticationContext(
+            context_type=context_type,
+            organization_id=organization_id,
+            membership_id=membership_id,
+            ip_address=ip_address,
+            user_agent=user_agent,
+        )
+
         credential = self.credential_repository.get_by_user_id(user_id)
 
         if credential is None:
             self._record_failed_attempt(
                 identifier=identifier,
                 user_id=None,
-                context_type=context_type,
-                organization_id=organization_id,
-                membership_id=membership_id,
-                ip_address=ip_address,
-                user_agent=user_agent,
+                context=context,
                 failure_reason="INVALID_CREDENTIALS",
             )
 
@@ -94,11 +111,7 @@ class AuthenticationService:
             self._record_failed_attempt(
                 identifier=identifier,
                 user_id=user_id,
-                context_type=context_type,
-                organization_id=organization_id,
-                membership_id=membership_id,
-                ip_address=ip_address,
-                user_agent=user_agent,
+                context=context,
                 failure_reason="CREDENTIAL_INACTIVE",
             )
 
@@ -113,11 +126,7 @@ class AuthenticationService:
             self._record_failed_attempt(
                 identifier=identifier,
                 user_id=user_id,
-                context_type=context_type,
-                organization_id=organization_id,
-                membership_id=membership_id,
-                ip_address=ip_address,
-                user_agent=user_agent,
+                context=context,
                 failure_reason="ACCOUNT_LOCKED",
             )
 
@@ -133,11 +142,7 @@ class AuthenticationService:
                 credential=credential,
                 identifier=identifier,
                 user_id=user_id,
-                context_type=context_type,
-                organization_id=organization_id,
-                membership_id=membership_id,
-                ip_address=ip_address,
-                user_agent=user_agent,
+                context=context,
                 now=current_time,
             )
 
@@ -163,21 +168,21 @@ class AuthenticationService:
             identifier=identifier,
             user_id=user_id,
             successful=True,
-            context_type=context_type,
-            organization_id=organization_id,
-            membership_id=membership_id,
-            ip_address=ip_address,
-            user_agent=user_agent,
+            context_type=context.context_type,
+            organization_id=context.organization_id,
+            membership_id=context.membership_id,
+            ip_address=context.ip_address,
+            user_agent=context.user_agent,
         )
 
         self.event_repository.create_auth_event(
             user_id=user_id,
-            context_type=context_type,
+            context_type=context.context_type,
             event_type="LOGIN_SUCCESS",
-            organization_id=organization_id,
-            membership_id=membership_id,
-            ip_address=ip_address,
-            user_agent=user_agent,
+            organization_id=context.organization_id,
+            membership_id=context.membership_id,
+            ip_address=context.ip_address,
+            user_agent=context.user_agent,
         )
 
         return AuthenticationResult(
@@ -192,11 +197,7 @@ class AuthenticationService:
         credential: AuthCredential,
         identifier: str,
         user_id: UUID,
-        context_type: str,
-        organization_id: UUID | None,
-        membership_id: UUID | None,
-        ip_address: str | None,
-        user_agent: str | None,
+        context: AuthenticationContext,
         now: datetime,
     ) -> AuthCredential:
         """
@@ -211,11 +212,11 @@ class AuthenticationService:
             identifier=identifier,
             user_id=user_id,
             successful=False,
-            context_type=context_type,
-            organization_id=organization_id,
-            membership_id=membership_id,
-            ip_address=ip_address,
-            user_agent=user_agent,
+            context_type=context.context_type,
+            organization_id=context.organization_id,
+            membership_id=context.membership_id,
+            ip_address=context.ip_address,
+            user_agent=context.user_agent,
             failure_reason="INVALID_CREDENTIALS",
         )
 
@@ -227,25 +228,25 @@ class AuthenticationService:
 
             self.event_repository.create_security_event(
                 user_id=user_id,
-                context_type=context_type,
+                context_type=context.context_type,
                 event_type="ACCOUNT_LOCKED",
                 severity="warning",
                 description="Account locked after repeated failed login attempts.",
-                organization_id=organization_id,
-                membership_id=membership_id,
-                ip_address=ip_address,
-                user_agent=user_agent,
+                organization_id=context.organization_id,
+                membership_id=context.membership_id,
+                ip_address=context.ip_address,
+                user_agent=context.user_agent,
             )
 
         else:
             self.event_repository.create_auth_event(
                 user_id=user_id,
-                context_type=context_type,
+                context_type=context.context_type,
                 event_type="LOGIN_FAILURE",
-                organization_id=organization_id,
-                membership_id=membership_id,
-                ip_address=ip_address,
-                user_agent=user_agent,
+                organization_id=context.organization_id,
+                membership_id=context.membership_id,
+                ip_address=context.ip_address,
+                user_agent=context.user_agent,
                 metadata_json='{"reason":"INVALID_CREDENTIALS"}',
             )
 
@@ -256,11 +257,7 @@ class AuthenticationService:
         *,
         identifier: str,
         user_id: UUID | None,
-        context_type: str,
-        organization_id: UUID | None,
-        membership_id: UUID | None,
-        ip_address: str | None,
-        user_agent: str | None,
+        context: AuthenticationContext,
         failure_reason: str,
     ) -> None:
         """
@@ -271,21 +268,21 @@ class AuthenticationService:
             identifier=identifier,
             user_id=user_id,
             successful=False,
-            context_type=context_type,
-            organization_id=organization_id,
-            membership_id=membership_id,
-            ip_address=ip_address,
-            user_agent=user_agent,
+            context_type=context.context_type,
+            organization_id=context.organization_id,
+            membership_id=context.membership_id,
+            ip_address=context.ip_address,
+            user_agent=context.user_agent,
             failure_reason=failure_reason,
         )
 
         self.event_repository.create_auth_event(
             user_id=user_id,
-            context_type=context_type,
+            context_type=context.context_type,
             event_type="LOGIN_FAILURE",
-            organization_id=organization_id,
-            membership_id=membership_id,
-            ip_address=ip_address,
-            user_agent=user_agent,
+            organization_id=context.organization_id,
+            membership_id=context.membership_id,
+            ip_address=context.ip_address,
+            user_agent=context.user_agent,
             metadata_json=f'{{"reason":"{failure_reason}"}}',
         )
