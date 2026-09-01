@@ -1,0 +1,7159 @@
+============================================================
+BUILDOS AUTHENTICATION SERVICE — COMPLETE SOURCE REVIEW
+============================================================
+
+Git commit:
+385a773 file review
+
+============================================================
+PROJECT FILE TREE
+============================================================
+app/__init__.py
+app/api/__init__.py
+app/api/dependencies.py
+app/api/v1/__init__.py
+app/api/v1/auth.py
+app/api/v1/password.py
+app/api/v1/router.py
+app/api/v1/security.py
+app/api/v1/token.py
+app/core/config.py
+app/core/constants.py
+app/core/exceptions.py
+app/core/logging.py
+app/database/base.py
+app/database/dependencies.py
+app/database/session.py
+app/integrations/permission_service.py
+app/integrations/role_service.py
+app/integrations/session_service.py
+app/integrations/user_service.py
+app/main.py
+app/models/__init__.py
+app/models/auth_credential.py
+app/models/auth_event.py
+app/models/login_attempt.py
+app/models/password_reset.py
+app/models/refresh_token.py
+app/models/security_event.py
+app/repositories/__init__.py
+app/repositories/credential_repository.py
+app/repositories/event_repository.py
+app/repositories/login_attempt_repository.py
+app/repositories/password_reset_repository.py
+app/repositories/token_repository.py
+app/schemas/auth.py
+app/schemas/password.py
+app/schemas/security.py
+app/schemas/token.py
+app/security/authentication.py
+app/security/password_hashing.py
+app/security/rate_limiting.py
+app/security/token_signing.py
+app/security/token_validation.py
+app/services/authentication_service.py
+app/services/login_service.py
+app/services/logout_service.py
+app/services/password_service.py
+app/services/security_service.py
+app/services/token_service.py
+docs/architecture/IMPLEMENTATION_CHECKPOINT.md
+migrations/env.py
+tests/__init__.py
+tests/api/__init__.py
+tests/api/test_auth_login.py
+tests/repositories/__init__.py
+tests/repositories/test_token_repository.py
+tests/security/test_token_signing.py
+tests/services/__init__.py
+tests/services/test_authentication_service.py
+tests/services/test_password_service.py
+
+============================================================
+SOURCE FILES
+============================================================
+
+============================================================
+FILE: app/__init__.py
+============================================================
+
+
+============================================================
+FILE: app/api/__init__.py
+============================================================
+
+
+============================================================
+FILE: app/api/dependencies.py
+============================================================
+"""
+BuildOS Auth Service
+API Dependencies
+"""
+
+from typing import Annotated
+from uuid import UUID
+
+from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from sqlalchemy.orm import Session
+
+from app.core.constants import CONTEXT_PERSONAL
+from app.core.exceptions import ExpiredTokenError, InvalidTokenError
+from app.database.dependencies import get_db
+from app.integrations.user_service import UserService
+from app.repositories.credential_repository import CredentialRepository
+from app.repositories.event_repository import EventRepository
+from app.repositories.login_attempt_repository import LoginAttemptRepository
+from app.repositories.password_reset_repository import PasswordResetRepository
+from app.repositories.token_repository import TokenRepository
+from app.schemas.token import TokenUserContext
+from app.security.token_validation import validate_access_token
+from app.services.authentication_service import AuthenticationService
+from app.services.login_service import LoginService
+from app.services.password_service import PasswordService
+from app.services.token_service import TokenService
+
+DatabaseSession = Annotated[Session, Depends(get_db)]
+
+
+def get_user_service() -> UserService:
+    """
+    Provide the canonical User Service integration.
+    """
+
+    return UserService()
+
+
+def get_authentication_service(
+    db: DatabaseSession,
+) -> AuthenticationService:
+    """
+    Build the authentication domain service with its repositories.
+    """
+
+    credential_repository = CredentialRepository(db)
+    login_attempt_repository = LoginAttemptRepository(db)
+    event_repository = EventRepository(db)
+
+    return AuthenticationService(
+        credential_repository=credential_repository,
+        login_attempt_repository=login_attempt_repository,
+        event_repository=event_repository,
+    )
+
+
+def get_login_service(
+    db: DatabaseSession,
+) -> LoginService:
+    """
+    Build the login orchestration service.
+    """
+
+    return LoginService(
+        user_service=get_user_service(),
+        authentication_service=get_authentication_service(db),
+    )
+
+
+LoginServiceDependency = Annotated[
+    LoginService,
+    Depends(get_login_service),
+]
+
+
+def get_password_service(
+    db: DatabaseSession,
+) -> PasswordService:
+    """
+    Build the password-management service with its repositories.
+    """
+
+    return PasswordService(
+        user_service=get_user_service(),
+        credential_repository=CredentialRepository(db),
+        password_reset_repository=PasswordResetRepository(db),
+        token_repository=TokenRepository(db),
+        event_repository=EventRepository(db),
+    )
+
+
+PasswordServiceDependency = Annotated[
+    PasswordService,
+    Depends(get_password_service),
+]
+
+
+def get_token_service(
+    db: DatabaseSession,
+) -> TokenService:
+    """
+    Build the token lifecycle service with its repositories.
+    """
+
+    return TokenService(
+        token_repository=TokenRepository(db),
+        event_repository=EventRepository(db),
+    )
+
+
+TokenServiceDependency = Annotated[
+    TokenService,
+    Depends(get_token_service),
+]
+
+
+bearer_scheme = HTTPBearer()
+
+
+def get_current_user_context(
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),  # noqa: B008
+) -> TokenUserContext:
+
+    
+    """
+    Resolve the authenticated user context from an access token.
+    """
+
+    try:
+        payload = validate_access_token(credentials.credentials)
+    except ExpiredTokenError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Access token has expired.",
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from exc
+    except InvalidTokenError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid access token.",
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from exc
+
+    subject = payload.get("sub")
+
+    if not isinstance(subject, str):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid access token.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    try:
+        user_id = UUID(subject)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid access token.",
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from exc
+
+    context_type = payload.get(
+        "context_type",
+        CONTEXT_PERSONAL,
+    )
+
+    if not isinstance(context_type, str):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid access token context.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    organization_id = _optional_uuid_claim(
+        payload,
+        "organization_id",
+    )
+
+    membership_id = _optional_uuid_claim(
+        payload,
+        "membership_id",
+    )
+
+    return TokenUserContext(
+        user_id=user_id,
+        context_type=context_type,
+        organization_id=organization_id,
+        membership_id=membership_id,
+    )
+
+
+CurrentUserContextDependency = Annotated[
+    TokenUserContext,
+    Depends(get_current_user_context),
+]
+
+
+def _optional_uuid_claim(
+    payload: dict[str, object],
+    claim_name: str,
+) -> UUID | None:
+    """
+    Parse an optional UUID claim from an access-token payload.
+    """
+
+    value = payload.get(claim_name)
+
+    if value is None:
+        return None
+
+    if not isinstance(value, str):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid access token context.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    try:
+        return UUID(value)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid access token context.",
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from exc
+
+
+__all__ = [
+    "CurrentUserContextDependency",
+    "DatabaseSession",
+    "LoginServiceDependency",
+    "PasswordServiceDependency",
+    "TokenServiceDependency",
+    "get_authentication_service",
+    "get_current_user_context",
+    "get_db",
+    "get_login_service",
+    "get_password_service",
+    "get_token_service",
+    "get_user_service",
+]
+
+
+============================================================
+FILE: app/api/v1/__init__.py
+============================================================
+
+
+============================================================
+FILE: app/api/v1/auth.py
+============================================================
+"""
+BuildOS Auth Service
+Authentication API
+"""
+
+from fastapi import APIRouter, HTTPException, Request, status
+
+from app.api.dependencies import LoginServiceDependency
+from app.core.exceptions import AuthenticationError, IntegrationError
+from app.schemas.auth import LoginRequest, LoginResponse
+
+router = APIRouter()
+
+
+@router.post(
+    "/login",
+    response_model=LoginResponse,
+    status_code=status.HTTP_200_OK,
+)
+def login(
+    payload: LoginRequest,
+    request: Request,
+    login_service: LoginServiceDependency,
+) -> LoginResponse:
+    """
+    Authenticate a BuildOS user.
+
+    User identity is resolved by the canonical User Service.
+    Credential verification is performed by the Auth Service.
+    """
+
+    try:
+        result = login_service.login(
+            identifier=payload.identifier,
+            password=payload.password,
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    except AuthenticationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid credentials.",
+        ) from exc
+    except IntegrationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="User identity service is unavailable.",
+        ) from exc
+
+    if not result.authentication.authenticated:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid credentials.",
+        )
+
+    user_id = result.authentication.user_id
+
+    if user_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Authentication completed without a user identity.",
+        )
+
+    return LoginResponse(
+        authenticated=True,
+        user_id=user_id,
+    )
+
+
+============================================================
+FILE: app/api/v1/password.py
+============================================================
+"""
+BuildOS Auth Service
+Password API
+"""
+
+from fastapi import APIRouter, HTTPException, Request, status
+
+from app.api.dependencies import (
+    CurrentUserContextDependency,
+    PasswordServiceDependency,
+)
+from app.core.exceptions import InvalidCredentialsError, PasswordResetError
+from app.schemas.password import (
+    ChangePasswordRequest,
+    ChangePasswordResponse,
+    PasswordResetConfirmRequest,
+    PasswordResetConfirmResponse,
+    PasswordResetRequest,
+    PasswordResetRequestResponse,
+)
+from app.services.password_service import PasswordContext
+
+router = APIRouter()
+
+
+@router.post(
+    "/change",
+    response_model=ChangePasswordResponse,
+    status_code=status.HTTP_200_OK,
+)
+def change_password(
+    payload: ChangePasswordRequest,
+    request: Request,
+    password_service: PasswordServiceDependency,
+    current_user: CurrentUserContextDependency,
+) -> ChangePasswordResponse:
+    """Change the authenticated user's password."""
+
+    try:
+        result = password_service.change_password(
+            user_id=current_user.user_id,
+            current_password=payload.current_password,
+            new_password=payload.new_password,
+            context=PasswordContext(
+                ip_address=request.client.host if request.client else None,
+                user_agent=request.headers.get("user-agent"),
+            ),
+        )
+    except InvalidCredentialsError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(exc),
+        ) from exc
+
+    return ChangePasswordResponse(
+        changed=result.changed,
+        user_id=result.user_id,
+    )
+
+
+@router.post(
+    "/reset/request",
+    response_model=PasswordResetRequestResponse,
+    status_code=status.HTTP_200_OK,
+)
+def request_password_reset(
+    payload: PasswordResetRequest,
+    request: Request,
+    password_service: PasswordServiceDependency,
+) -> PasswordResetRequestResponse:
+    """Request a password reset without revealing account existence."""
+
+    result = password_service.request_reset(
+        identifier=payload.identifier,
+        ip_address=request.client.host if request.client else None,
+    )
+
+    return PasswordResetRequestResponse(
+        requested=result.requested,
+    )
+
+
+@router.post(
+    "/reset/confirm",
+    response_model=PasswordResetConfirmResponse,
+    status_code=status.HTTP_200_OK,
+)
+def confirm_password_reset(
+    payload: PasswordResetConfirmRequest,
+    request: Request,
+    password_service: PasswordServiceDependency,
+) -> PasswordResetConfirmResponse:
+    """Complete a password reset using a valid reset token."""
+
+    try:
+        result = password_service.confirm_reset(
+            reset_token=payload.reset_token,
+            new_password=payload.new_password,
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    except PasswordResetError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+    return PasswordResetConfirmResponse(
+        reset=result.reset,
+        user_id=result.user_id,
+    )
+
+
+============================================================
+FILE: app/api/v1/router.py
+============================================================
+"""
+BuildOS Auth Service
+API v1 Router
+"""
+
+from fastapi import APIRouter
+
+from app.api.v1 import auth, password, security, token
+
+router = APIRouter(prefix="/v1")
+
+router.include_router(
+    auth.router,
+    prefix="/auth",
+    tags=["authentication"],
+)
+
+router.include_router(
+    password.router,
+    prefix="/password",
+    tags=["password"],
+)
+
+router.include_router(
+    security.router,
+    prefix="/security",
+    tags=["security"],
+)
+
+router.include_router(
+    token.router,
+    prefix="/token",
+    tags=["token"],
+)
+
+
+============================================================
+FILE: app/api/v1/security.py
+============================================================
+"""
+BuildOS Auth Service
+Security API
+"""
+
+from fastapi import APIRouter
+
+router = APIRouter()
+
+
+============================================================
+FILE: app/api/v1/token.py
+============================================================
+"""
+BuildOS Auth Service
+Token API
+"""
+
+from fastapi import APIRouter, HTTPException, Request, status
+
+from app.api.dependencies import TokenServiceDependency
+from app.core.exceptions import (
+    ExpiredTokenError,
+    InvalidTokenError,
+    RevokedTokenError,
+)
+from app.schemas.token import (
+    TokenRefreshRequest,
+    TokenRefreshResponse,
+    TokenRevokeRequest,
+    TokenRevokeResponse,
+)
+
+router = APIRouter()
+
+
+@router.post(
+    "/refresh",
+    response_model=TokenRefreshResponse,
+    status_code=status.HTTP_200_OK,
+)
+def refresh_token(
+    payload: TokenRefreshRequest,
+    request: Request,
+    token_service: TokenServiceDependency,
+) -> TokenRefreshResponse:
+    """
+    Rotate a refresh token and issue a new token pair.
+    """
+
+    try:
+        token_pair = token_service.refresh(
+            refresh_token=payload.refresh_token,
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    except ExpiredTokenError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Refresh token has expired.",
+        ) from exc
+    except RevokedTokenError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Refresh token has been revoked.",
+        ) from exc
+    except InvalidTokenError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid refresh token.",
+        ) from exc
+
+    return TokenRefreshResponse(
+        access_token=token_pair.access_token,
+        refresh_token=token_pair.refresh_token,
+        token_type=token_pair.token_type,
+    )
+
+
+@router.post(
+    "/revoke",
+    response_model=TokenRevokeResponse,
+    status_code=status.HTTP_200_OK,
+)
+def revoke_token(
+    payload: TokenRevokeRequest,
+    request: Request,
+    token_service: TokenServiceDependency,
+) -> TokenRevokeResponse:
+    """
+    Revoke a single refresh token.
+    """
+
+    try:
+        token_service.revoke(
+            refresh_token=payload.refresh_token,
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    except ExpiredTokenError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Refresh token has expired.",
+        ) from exc
+    except RevokedTokenError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Refresh token has already been revoked.",
+        ) from exc
+    except InvalidTokenError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid refresh token.",
+        ) from exc
+
+    return TokenRevokeResponse(
+        revoked=True,
+    )
+
+
+============================================================
+FILE: app/core/config.py
+============================================================
+"""
+BuildOS Auth Service
+Application Configuration
+"""
+
+from functools import lru_cache
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    """
+    Runtime configuration for the BuildOS Auth Service.
+    """
+
+    # Application
+    service_name: str = "buildos-auth-service"
+    environment: str = "development"
+    debug: bool = False
+
+    # Database
+    database_url: str
+
+    # JWT
+    jwt_secret_key: str
+    jwt_algorithm: str = "HS256"
+    jwt_issuer: str = "buildos-auth-service"
+    jwt_audience: str = "buildos-api"
+
+    access_token_expire_minutes: int = 15
+    refresh_token_expire_days: int = 30
+
+    # Password security
+    password_hash_time_cost: int = 3
+    password_hash_memory_cost: int = 65536
+    password_hash_parallelism: int = 4
+
+    # Authentication security
+    max_failed_login_attempts: int = 5
+    login_lockout_minutes: int = 15
+    login_rate_limit_window_minutes: int = 15
+
+    # Password reset
+    password_reset_expire_minutes: int = 30
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+    )
+
+
+@lru_cache
+def get_settings() -> Settings:
+    """
+    Return the cached application settings.
+    """
+    return Settings()  # type: ignore[call-arg]
+
+
+settings = get_settings()
+
+============================================================
+FILE: app/core/constants.py
+============================================================
+"""
+BuildOS Auth Service
+Application Constants
+"""
+
+# ---------------------------------------------------------------------------
+# Authentication contexts
+# ---------------------------------------------------------------------------
+
+CONTEXT_PERSONAL = "PERSONAL"
+CONTEXT_ORGANIZATION = "ORGANIZATION"
+
+
+# ---------------------------------------------------------------------------
+# Authentication events
+# ---------------------------------------------------------------------------
+
+EVENT_LOGIN_SUCCESS = "LOGIN_SUCCESS"
+EVENT_LOGIN_FAILURE = "LOGIN_FAILURE"
+EVENT_LOGOUT = "LOGOUT"
+EVENT_LOGOUT_ALL = "LOGOUT_ALL"
+EVENT_TOKEN_REFRESH = "TOKEN_REFRESH"
+EVENT_TOKEN_REVOKED = "TOKEN_REVOKED"
+
+
+# ---------------------------------------------------------------------------
+# Security events
+# ---------------------------------------------------------------------------
+
+EVENT_ACCOUNT_LOCKED = "ACCOUNT_LOCKED"
+EVENT_ACCOUNT_UNLOCKED = "ACCOUNT_UNLOCKED"
+EVENT_PASSWORD_CHANGED = "PASSWORD_CHANGED"
+EVENT_PASSWORD_RESET_REQUESTED = "PASSWORD_RESET_REQUESTED"
+EVENT_PASSWORD_RESET_COMPLETED = "PASSWORD_RESET_COMPLETED"
+
+
+# ---------------------------------------------------------------------------
+# Authentication failure reasons
+# ---------------------------------------------------------------------------
+
+FAILURE_INVALID_CREDENTIALS = "INVALID_CREDENTIALS"
+FAILURE_CREDENTIAL_INACTIVE = "CREDENTIAL_INACTIVE"
+FAILURE_ACCOUNT_LOCKED = "ACCOUNT_LOCKED"
+FAILURE_ACCOUNT_DISABLED = "ACCOUNT_DISABLED"
+FAILURE_USER_NOT_FOUND = "USER_NOT_FOUND"
+
+
+# ---------------------------------------------------------------------------
+# Token types
+# ---------------------------------------------------------------------------
+
+TOKEN_TYPE_ACCESS = "access"
+TOKEN_TYPE_REFRESH = "refresh"
+
+BEARER_TOKEN_TYPE = "bearer"
+
+
+# ---------------------------------------------------------------------------
+# Security severity
+# ---------------------------------------------------------------------------
+
+SEVERITY_INFO = "info"
+SEVERITY_WARNING = "warning"
+SEVERITY_ERROR = "error"
+SEVERITY_CRITICAL = "critical"
+
+
+# ---------------------------------------------------------------------------
+# Generic service metadata
+# ---------------------------------------------------------------------------
+
+SERVICE_NAME = "buildos-auth-service"
+API_VERSION = "v1"
+
+============================================================
+FILE: app/core/exceptions.py
+============================================================
+"""
+BuildOS Auth Service
+Application Exceptions
+"""
+
+
+class AuthServiceError(Exception):
+    """Base exception for the authentication service."""
+
+
+class AuthenticationError(AuthServiceError):
+    """Raised when authentication fails."""
+
+
+class InvalidCredentialsError(AuthenticationError):
+    """Raised when supplied credentials are invalid."""
+
+
+class AccountLockedError(AuthenticationError):
+    """Raised when an account is currently locked."""
+
+
+class CredentialInactiveError(AuthenticationError):
+    """Raised when authentication credentials are inactive."""
+
+
+class UserNotFoundError(AuthServiceError):
+    """Raised when a canonical user cannot be resolved."""
+
+
+class TokenError(AuthServiceError):
+    """Base exception for token-related failures."""
+
+
+class InvalidTokenError(TokenError):
+    """Raised when a token is invalid."""
+
+
+class ExpiredTokenError(TokenError):
+    """Raised when a token has expired."""
+
+
+class RevokedTokenError(TokenError):
+    """Raised when a token has been revoked."""
+
+
+class PasswordError(AuthServiceError):
+    """Base exception for password-related failures."""
+
+
+class PasswordResetError(PasswordError):
+    """Raised when a password reset operation fails."""
+
+
+class IntegrationError(AuthServiceError):
+    """Raised when an external service integration fails."""
+
+============================================================
+FILE: app/core/logging.py
+============================================================
+"""
+BuildOS Auth Service
+Logging Configuration
+"""
+
+import logging
+import sys
+
+LOG_FORMAT = (
+    "%(asctime)s | %(levelname)s | "
+    "%(name)s | %(message)s"
+)
+
+
+def configure_logging(
+    *,
+    level: int = logging.INFO,
+) -> None:
+    """
+    Configure application-wide logging.
+
+    Configuration is intentionally centralized so the service can later
+    integrate structured logging without changing individual modules.
+    """
+
+    logging.basicConfig(
+        level=level,
+        format=LOG_FORMAT,
+        stream=sys.stdout,
+        force=True,
+    )
+
+
+def get_logger(name: str) -> logging.Logger:
+    """
+    Return a logger for an application module.
+    """
+
+    return logging.getLogger(name)
+
+============================================================
+FILE: app/database/base.py
+============================================================
+"""
+BuildOS Auth Service
+Database Declarative Base
+"""
+
+from sqlalchemy.orm import DeclarativeBase
+
+
+class Base(DeclarativeBase):
+    """
+    Declarative base for all SQLAlchemy models
+    owned by the BuildOS Auth Service.
+    """
+
+============================================================
+FILE: app/database/dependencies.py
+============================================================
+"""
+BuildOS Auth Service
+Database Dependencies
+"""
+
+from collections.abc import Generator
+
+from sqlalchemy.orm import Session
+
+from app.database.session import SessionLocal
+
+
+def get_db() -> Generator[Session, None, None]:
+    """
+    Provide a database session for an API request.
+
+    The session is always closed when the request finishes.
+    """
+
+    db = SessionLocal()
+
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+============================================================
+FILE: app/database/session.py
+============================================================
+"""
+BuildOS Auth Service
+Database Engine and Session
+"""
+
+from collections.abc import Generator
+
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session, sessionmaker
+
+from app.core.config import settings
+
+engine = create_engine(
+    settings.database_url,
+    pool_pre_ping=True,
+)
+
+SessionLocal = sessionmaker(
+    bind=engine,
+    class_=Session,
+    autocommit=False,
+    autoflush=False,
+)
+
+
+def get_db() -> Generator[Session, None, None]:
+    """
+    Provide a database session for application requests.
+    """
+    db = SessionLocal()
+
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+============================================================
+FILE: app/integrations/permission_service.py
+============================================================
+
+
+============================================================
+FILE: app/integrations/role_service.py
+============================================================
+
+
+============================================================
+FILE: app/integrations/session_service.py
+============================================================
+
+
+============================================================
+FILE: app/integrations/user_service.py
+============================================================
+"""
+BuildOS Auth Service
+User Service Integration
+"""
+
+from uuid import UUID
+
+from app.core.exceptions import IntegrationError
+
+
+class UserService:
+    """
+    Integration boundary for the canonical BuildOS User Service.
+
+    The Auth Service does not own canonical user identity records.
+
+    The User Service remains authoritative for the canonical user record.
+    Auth only asks it to resolve an approved authentication identifier
+    such as an email address or phone number into a canonical user_id.
+    """
+
+    def resolve_identifier(
+        self,
+        *,
+        identifier: str,
+    ) -> UUID | None:
+        """
+        Resolve an authentication identifier to a canonical user ID.
+
+        The transport implementation will be added behind this boundary.
+        """
+
+        normalized_identifier = identifier.strip()
+
+        if not normalized_identifier:
+            return None
+
+        raise IntegrationError(
+            "User Service integration transport is not configured."
+        )
+
+============================================================
+FILE: app/main.py
+============================================================
+"""
+BuildOS Auth Service
+Application Entry Point
+"""
+
+from fastapi import FastAPI
+
+from app.api.v1.router import router as api_router
+from app.core.config import settings
+from app.core.logging import configure_logging
+
+
+def create_application() -> FastAPI:
+    """
+    Create and configure the FastAPI application.
+    """
+
+    configure_logging()
+
+    application = FastAPI(
+        title="BuildOS Authentication Service",
+        description=(
+            "Authentication and security service for the BuildOS platform."
+        ),
+        version="0.1.0",
+        debug=settings.debug,
+    )
+
+    application.include_router(
+        api_router,
+        prefix="/api",
+    )
+
+    @application.get(
+        "/health",
+        tags=["health"],
+    )
+    def health_check() -> dict[str, str]:
+        """
+        Basic service health check.
+        """
+
+        return {
+            "status": "ok",
+            "service": settings.service_name,
+        }
+
+    return application
+
+
+app = create_application()
+
+============================================================
+FILE: app/models/__init__.py
+============================================================
+"""
+BuildOS Auth Service
+Database Models
+"""
+
+from app.models.auth_credential import AuthCredential
+from app.models.auth_event import AuthEvent
+from app.models.login_attempt import LoginAttempt
+from app.models.password_reset import PasswordReset
+from app.models.refresh_token import RefreshToken
+from app.models.security_event import SecurityEvent
+
+__all__ = [
+    "AuthCredential",
+    "AuthEvent",
+    "LoginAttempt",
+    "PasswordReset",
+    "RefreshToken",
+    "SecurityEvent",
+]
+
+============================================================
+FILE: app/models/auth_credential.py
+============================================================
+"""
+BuildOS Auth Service
+Authentication Credential Model
+"""
+
+from datetime import datetime
+from uuid import UUID, uuid4
+
+from sqlalchemy import Boolean, DateTime, Integer, Text, text
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
+from sqlalchemy.orm import Mapped, mapped_column
+
+from app.database.base import Base
+
+
+class AuthCredential(Base):
+    """
+    Authentication credentials belonging to a canonical BuildOS user.
+
+    The canonical user/person record is owned by the BuildOS User Service.
+
+    This model stores only authentication state:
+    - password hash
+    - account activation
+    - account lock state
+    - failed login tracking
+    - password/login timestamps
+    """
+
+    __tablename__ = "auth_credentials"
+
+    id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid4,
+    )
+
+    # Canonical Person/User ID from the User Service.
+    user_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        nullable=False,
+        unique=True,
+        index=True,
+    )
+
+    password_hash: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+    )
+
+    is_active: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=True,
+        server_default=text("true"),
+    )
+
+    is_locked: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default=text("false"),
+    )
+
+    failed_login_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default=text("0"),
+    )
+
+    locked_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    password_changed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+
+    last_login_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<AuthCredential "
+            f"id={self.id!s} "
+            f"user_id={self.user_id!s} "
+            f"is_active={self.is_active} "
+            f"is_locked={self.is_locked}>"
+        )
+
+============================================================
+FILE: app/models/auth_event.py
+============================================================
+"""
+BuildOS Auth Service
+Authentication Event Model
+"""
+
+from datetime import datetime
+from uuid import UUID, uuid4
+
+from sqlalchemy import DateTime, String, Text, func
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
+from sqlalchemy.orm import Mapped, mapped_column
+
+from app.database.base import Base
+
+
+class AuthEvent(Base):
+    """
+    Records authentication lifecycle events.
+
+    Examples:
+    - login
+    - logout
+    - token issued
+    - token refreshed
+    - token revoked
+    - authentication failure
+    - context switched
+    """
+
+    __tablename__ = "auth_events"
+
+    id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid4,
+    )
+
+    user_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        nullable=True,
+        index=True,
+    )
+
+    context_type: Mapped[str] = mapped_column(
+        String(30),
+        nullable=False,
+        default="PERSONAL",
+        server_default="PERSONAL",
+        index=True,
+    )
+
+    organization_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        nullable=True,
+        index=True,
+    )
+
+    membership_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        nullable=True,
+        index=True,
+    )
+
+    event_type: Mapped[str] = mapped_column(
+        String(100),
+        nullable=False,
+        index=True,
+    )
+
+    ip_address: Mapped[str | None] = mapped_column(
+        String(45),
+        nullable=True,
+    )
+
+    user_agent: Mapped[str | None] = mapped_column(
+        String(1000),
+        nullable=True,
+    )
+
+    metadata_json: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<AuthEvent "
+            f"id={self.id!s} "
+            f"user_id={self.user_id!s} "
+            f"context_type={self.context_type!r} "
+            f"event_type={self.event_type!r}>"
+        )
+
+============================================================
+FILE: app/models/login_attempt.py
+============================================================
+"""
+BuildOS Auth Service
+Login Attempt Model
+"""
+
+from datetime import datetime
+from uuid import UUID, uuid4
+
+from sqlalchemy import Boolean, DateTime, String, func
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
+from sqlalchemy.orm import Mapped, mapped_column
+
+from app.database.base import Base
+
+
+class LoginAttempt(Base):
+    """
+    Records authentication attempts.
+
+    A login may establish either:
+
+    - PERSONAL context
+    - ORGANIZATION context
+    """
+
+    __tablename__ = "login_attempts"
+
+    id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid4,
+    )
+
+    user_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        nullable=True,
+        index=True,
+    )
+
+    identifier: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+        index=True,
+    )
+
+    context_type: Mapped[str] = mapped_column(
+        String(30),
+        nullable=False,
+        default="PERSONAL",
+        server_default="PERSONAL",
+        index=True,
+    )
+
+    organization_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        nullable=True,
+        index=True,
+    )
+
+    membership_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        nullable=True,
+        index=True,
+    )
+
+    ip_address: Mapped[str | None] = mapped_column(
+        String(45),
+        nullable=True,
+    )
+
+    user_agent: Mapped[str | None] = mapped_column(
+        String(1000),
+        nullable=True,
+    )
+
+    successful: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
+
+    failure_reason: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+    )
+
+    attempted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<LoginAttempt "
+            f"id={self.id!s} "
+            f"user_id={self.user_id!s} "
+            f"context_type={self.context_type!r} "
+            f"successful={self.successful}>"
+        )
+
+============================================================
+FILE: app/models/password_reset.py
+============================================================
+"""
+BuildOS Auth Service
+Password Reset Model
+"""
+
+from datetime import datetime
+from uuid import UUID, uuid4
+
+from sqlalchemy import Boolean, DateTime, Text, func
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
+from sqlalchemy.orm import Mapped, mapped_column
+
+from app.database.base import Base
+
+
+class PasswordReset(Base):
+    """
+    Stores password-reset request state.
+
+    Raw reset tokens must never be persisted.
+    """
+
+    __tablename__ = "password_resets"
+
+    id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid4,
+    )
+
+    # Canonical Person/User ID.
+    user_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        nullable=False,
+        index=True,
+    )
+
+    token_hash: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        unique=True,
+        index=True,
+    )
+
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        index=True,
+    )
+
+    used_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    is_used: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+        index=True,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    requested_ip: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<PasswordReset "
+            f"id={self.id!s} "
+            f"user_id={self.user_id!s} "
+            f"is_used={self.is_used}>"
+        )
+
+============================================================
+FILE: app/models/refresh_token.py
+============================================================
+"""
+BuildOS Auth Service
+Refresh Token Model
+"""
+
+from datetime import datetime
+from uuid import UUID, uuid4
+
+from sqlalchemy import Boolean, DateTime, String, Text, func
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
+from sqlalchemy.orm import Mapped, mapped_column
+
+from app.database.base import Base
+
+
+class RefreshToken(Base):
+    """
+    Stores refresh-token state.
+
+    A refresh token belongs to a user, but may represent either:
+
+    1. PERSONAL context
+    2. ORGANIZATION context
+
+    The organization and membership IDs are references to records
+    owned by other BuildOS services.
+    """
+
+    __tablename__ = "refresh_tokens"
+
+    id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid4,
+    )
+
+    # Canonical Person/User ID.
+    user_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        nullable=False,
+        index=True,
+    )
+
+    # PERSONAL or ORGANIZATION.
+    context_type: Mapped[str] = mapped_column(
+        String(30),
+        nullable=False,
+        default="PERSONAL",
+        server_default="PERSONAL",
+        index=True,
+    )
+
+    # Organization ID when context_type = ORGANIZATION.
+    organization_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        nullable=True,
+        index=True,
+    )
+
+    # Membership ID authorizing the user to act for the organization.
+    membership_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        nullable=True,
+        index=True,
+    )
+
+    token_hash: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        unique=True,
+        index=True,
+    )
+
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        index=True,
+    )
+
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    is_revoked: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+        index=True,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    last_used_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    replaced_by_token_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        nullable=True,
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<RefreshToken "
+            f"id={self.id!s} "
+            f"user_id={self.user_id!s} "
+            f"context_type={self.context_type!r} "
+            f"organization_id={self.organization_id!s} "
+            f"is_revoked={self.is_revoked}>"
+        )
+
+
+============================================================
+FILE: app/models/security_event.py
+============================================================
+"""
+BuildOS Auth Service
+Security Event Model
+"""
+
+from datetime import datetime
+from uuid import UUID, uuid4
+
+from sqlalchemy import DateTime, String, Text, func
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
+from sqlalchemy.orm import Mapped, mapped_column
+
+from app.database.base import Base
+
+
+class SecurityEvent(Base):
+    """
+    Records security-related events generated by the Auth Service.
+
+    Examples:
+    - account locked
+    - account unlocked
+    - password changed
+    - password reset requested
+    - suspicious authentication activity
+    - token revoked
+    - unauthorized organization access attempt
+    """
+
+    __tablename__ = "security_events"
+
+    id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid4,
+    )
+
+    user_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        nullable=True,
+        index=True,
+    )
+
+    context_type: Mapped[str] = mapped_column(
+        String(30),
+        nullable=False,
+        default="PERSONAL",
+        server_default="PERSONAL",
+        index=True,
+    )
+
+    organization_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        nullable=True,
+        index=True,
+    )
+
+    membership_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        nullable=True,
+        index=True,
+    )
+
+    event_type: Mapped[str] = mapped_column(
+        String(100),
+        nullable=False,
+        index=True,
+    )
+
+    severity: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default="info",
+        server_default="info",
+    )
+
+    description: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    ip_address: Mapped[str | None] = mapped_column(
+        String(45),
+        nullable=True,
+    )
+
+    user_agent: Mapped[str | None] = mapped_column(
+        String(1000),
+        nullable=True,
+    )
+
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<SecurityEvent "
+            f"id={self.id!s} "
+            f"user_id={self.user_id!s} "
+            f"context_type={self.context_type!r} "
+            f"event_type={self.event_type!r} "
+            f"severity={self.severity!r}>"
+        )
+
+============================================================
+FILE: app/repositories/__init__.py
+============================================================
+"""
+BuildOS Auth Service
+Repository Layer
+"""
+
+from app.repositories.credential_repository import CredentialRepository
+from app.repositories.event_repository import EventRepository
+from app.repositories.login_attempt_repository import LoginAttemptRepository
+from app.repositories.password_reset_repository import PasswordResetRepository
+from app.repositories.token_repository import TokenRepository
+
+__all__ = [
+    "CredentialRepository",
+    "EventRepository",
+    "LoginAttemptRepository",
+    "PasswordResetRepository",
+    "TokenRepository",
+]
+
+
+============================================================
+FILE: app/repositories/credential_repository.py
+============================================================
+"""
+BuildOS Auth Service
+Authentication Credential Repository
+"""
+
+from datetime import datetime
+from uuid import UUID
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.models.auth_credential import AuthCredential
+
+
+class CredentialRepository:
+    """Database access for authentication credentials."""
+
+    def __init__(self, db: Session) -> None:
+        self.db = db
+
+    def get_by_user_id(self, user_id: UUID) -> AuthCredential | None:
+        """Return authentication credentials for a user."""
+        stmt = select(AuthCredential).where(
+            AuthCredential.user_id == user_id
+        )
+        return self.db.scalar(stmt)
+
+    def create(
+        self,
+        *,
+        user_id: UUID,
+        password_hash: str,
+    ) -> AuthCredential:
+        """Create and persist authentication credentials for a user."""
+        credential = AuthCredential(
+            user_id=user_id,
+            password_hash=password_hash,
+        )
+
+        self.db.add(credential)
+        self.db.flush()
+        self.db.refresh(credential)
+
+        return credential
+
+    def update_password(
+        self,
+        credential: AuthCredential,
+        *,
+        password_hash: str,
+        changed_at: datetime,
+    ) -> AuthCredential:
+        """Replace a credential password hash and record the change time."""
+        credential.password_hash = password_hash
+        credential.password_changed_at = changed_at
+
+        self.db.flush()
+        self.db.refresh(credential)
+
+        return credential
+
+    def record_successful_login(
+        self,
+        credential: AuthCredential,
+        *,
+        login_at: datetime,
+    ) -> AuthCredential:
+        """Record a successful login and clear login failure state."""
+        credential.failed_login_count = 0
+        credential.is_locked = False
+        credential.locked_until = None
+        credential.last_login_at = login_at
+
+        self.db.flush()
+        self.db.refresh(credential)
+
+        return credential
+
+    def record_failed_login(
+        self,
+        credential: AuthCredential,
+    ) -> AuthCredential:
+        """Record one failed login attempt for a credential."""
+        credential.failed_login_count += 1
+
+        self.db.flush()
+        self.db.refresh(credential)
+
+        return credential
+
+    def lock(
+        self,
+        credential: AuthCredential,
+        *,
+        locked_until: datetime | None = None,
+    ) -> AuthCredential:
+        """Lock credentials until the specified time, if provided."""
+        credential.is_locked = True
+        credential.locked_until = locked_until
+
+        self.db.flush()
+        self.db.refresh(credential)
+
+        return credential
+
+    def unlock(
+        self,
+        credential: AuthCredential,
+    ) -> AuthCredential:
+        """Unlock credentials and reset the failed login counter."""
+        credential.is_locked = False
+        credential.locked_until = None
+        credential.failed_login_count = 0
+
+        self.db.flush()
+        self.db.refresh(credential)
+
+        return credential
+
+    def deactivate(
+        self,
+        credential: AuthCredential,
+    ) -> AuthCredential:
+        """Deactivate authentication credentials."""
+        credential.is_active = False
+
+        self.db.flush()
+        self.db.refresh(credential)
+
+        return credential
+
+    def activate(
+        self,
+        credential: AuthCredential,
+    ) -> AuthCredential:
+        """Activate authentication credentials."""
+        credential.is_active = True
+
+        self.db.flush()
+        self.db.refresh(credential)
+
+        return credential
+
+
+============================================================
+FILE: app/repositories/event_repository.py
+============================================================
+"""
+BuildOS Auth Service
+Authentication and Security Event Repository
+"""
+
+from uuid import UUID
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.models.auth_event import AuthEvent
+from app.models.security_event import SecurityEvent
+
+
+class EventRepository:
+    """Database access for authentication and security events."""
+
+    def __init__(self, db: Session) -> None:
+        self.db = db
+
+    # pylint: disable=too-many-arguments
+    def create_auth_event(
+        self,
+        *,
+        user_id: UUID | None,
+        context_type: str,
+        event_type: str,
+        organization_id: UUID | None = None,
+        membership_id: UUID | None = None,
+        ip_address: str | None = None,
+        user_agent: str | None = None,
+        metadata_json: str | None = None,
+    ) -> AuthEvent:
+        """Create and persist an authentication event."""
+        event = AuthEvent(
+            user_id=user_id,
+            context_type=context_type,
+            organization_id=organization_id,
+            membership_id=membership_id,
+            event_type=event_type,
+            ip_address=ip_address,
+            user_agent=user_agent,
+            metadata_json=metadata_json,
+        )
+
+        self.db.add(event)
+        self.db.flush()
+        self.db.refresh(event)
+
+        return event
+
+    # pylint: disable=too-many-arguments
+    def create_security_event(
+        self,
+        *,
+        user_id: UUID | None,
+        context_type: str,
+        event_type: str,
+        severity: str = "info",
+        description: str | None = None,
+        organization_id: UUID | None = None,
+        membership_id: UUID | None = None,
+        ip_address: str | None = None,
+        user_agent: str | None = None,
+    ) -> SecurityEvent:
+        """Create and persist a security event."""
+        event = SecurityEvent(
+            user_id=user_id,
+            context_type=context_type,
+            organization_id=organization_id,
+            membership_id=membership_id,
+            event_type=event_type,
+            severity=severity,
+            description=description,
+            ip_address=ip_address,
+            user_agent=user_agent,
+        )
+
+        self.db.add(event)
+        self.db.flush()
+        self.db.refresh(event)
+
+        return event
+
+    def get_auth_events_by_user(
+        self,
+        user_id: UUID,
+    ) -> list[AuthEvent]:
+        """Return authentication events belonging to a user."""
+        stmt = (
+            select(AuthEvent)
+            .where(AuthEvent.user_id == user_id)
+            .order_by(AuthEvent.occurred_at.desc())
+        )
+
+        return list(self.db.scalars(stmt).all())
+
+    def get_security_events_by_user(
+        self,
+        user_id: UUID,
+    ) -> list[SecurityEvent]:
+        """Return security events belonging to a user."""
+        stmt = (
+            select(SecurityEvent)
+            .where(SecurityEvent.user_id == user_id)
+            .order_by(SecurityEvent.occurred_at.desc())
+        )
+
+        return list(self.db.scalars(stmt).all())
+
+    def get_auth_events_by_type(
+        self,
+        event_type: str,
+    ) -> list[AuthEvent]:
+        """Return authentication events matching an event type."""
+        stmt = (
+            select(AuthEvent)
+            .where(AuthEvent.event_type == event_type)
+            .order_by(AuthEvent.occurred_at.desc())
+        )
+
+        return list(self.db.scalars(stmt).all())
+
+    def get_security_events_by_type(
+        self,
+        event_type: str,
+    ) -> list[SecurityEvent]:
+        """Return security events matching an event type."""
+        stmt = (
+            select(SecurityEvent)
+            .where(SecurityEvent.event_type == event_type)
+            .order_by(SecurityEvent.occurred_at.desc())
+        )
+
+        return list(self.db.scalars(stmt).all())
+
+
+============================================================
+FILE: app/repositories/login_attempt_repository.py
+============================================================
+"""
+BuildOS Auth Service
+Login Attempt Repository
+"""
+
+# pylint: disable=too-many-arguments
+
+from datetime import datetime
+from uuid import UUID
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+from sqlalchemy.sql.functions import count
+
+from app.models.login_attempt import LoginAttempt
+
+
+class LoginAttemptRepository:
+    """Database access for authentication attempts."""
+
+    def __init__(self, db: Session) -> None:
+        self.db = db
+
+    def create(
+        self,
+        *,
+        identifier: str,
+        successful: bool,
+        user_id: UUID | None = None,
+        context_type: str = "PERSONAL",
+        organization_id: UUID | None = None,
+        membership_id: UUID | None = None,
+        ip_address: str | None = None,
+        user_agent: str | None = None,
+        failure_reason: str | None = None,
+    ) -> LoginAttempt:
+        """Create and persist a login attempt."""
+        attempt = LoginAttempt(
+            identifier=identifier,
+            successful=successful,
+            user_id=user_id,
+            context_type=context_type,
+            organization_id=organization_id,
+            membership_id=membership_id,
+            ip_address=ip_address,
+            user_agent=user_agent,
+            failure_reason=failure_reason,
+        )
+
+        self.db.add(attempt)
+        self.db.flush()
+        self.db.refresh(attempt)
+
+        return attempt
+
+    def get_recent_by_identifier(
+        self,
+        *,
+        identifier: str,
+        since: datetime,
+    ) -> list[LoginAttempt]:
+        """Return recent login attempts for an identifier."""
+        stmt = (
+            select(LoginAttempt)
+            .where(
+                LoginAttempt.identifier == identifier,
+                LoginAttempt.attempted_at >= since,
+            )
+            .order_by(LoginAttempt.attempted_at.desc())
+        )
+
+        return list(self.db.scalars(stmt).all())
+
+    def get_recent_by_user(
+        self,
+        *,
+        user_id: UUID,
+        since: datetime,
+    ) -> list[LoginAttempt]:
+        """Return recent login attempts for a user."""
+        stmt = (
+            select(LoginAttempt)
+            .where(
+                LoginAttempt.user_id == user_id,
+                LoginAttempt.attempted_at >= since,
+            )
+            .order_by(LoginAttempt.attempted_at.desc())
+        )
+
+        return list(self.db.scalars(stmt).all())
+
+    def count_failed_by_identifier(
+        self,
+        *,
+        identifier: str,
+        since: datetime,
+    ) -> int:
+        """Count failed login attempts for an identifier."""
+        stmt = (
+            select(count())
+            .select_from(LoginAttempt)
+            .where(
+                LoginAttempt.identifier == identifier,
+                LoginAttempt.successful.is_(False),
+                LoginAttempt.attempted_at >= since,
+            )
+        )
+
+        return int(self.db.scalar(stmt) or 0)
+
+    def count_failed_by_user(
+        self,
+        *,
+        user_id: UUID,
+        since: datetime,
+    ) -> int:
+        """Count failed login attempts for a user."""
+        stmt = (
+            select(count())
+            .select_from(LoginAttempt)
+            .where(
+                LoginAttempt.user_id == user_id,
+                LoginAttempt.successful.is_(False),
+                LoginAttempt.attempted_at >= since,
+            )
+        )
+
+        return int(self.db.scalar(stmt) or 0)
+
+
+============================================================
+FILE: app/repositories/password_reset_repository.py
+============================================================
+"""
+BuildOS Auth Service
+Password Reset Repository
+"""
+
+from datetime import datetime
+from uuid import UUID
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.models.password_reset import PasswordReset
+
+
+class PasswordResetRepository:
+    """Database access for password reset records."""
+
+    def __init__(self, db: Session) -> None:
+        self.db = db
+
+    def create(
+        self,
+        *,
+        user_id: UUID,
+        token_hash: str,
+        expires_at: datetime,
+        requested_ip: str | None = None,
+    ) -> PasswordReset:
+        """Create and persist a password reset record."""
+        reset = PasswordReset(
+            user_id=user_id,
+            token_hash=token_hash,
+            expires_at=expires_at,
+            requested_ip=requested_ip,
+        )
+
+        self.db.add(reset)
+        self.db.flush()
+        self.db.refresh(reset)
+
+        return reset
+
+    def get_by_token_hash(
+        self,
+        token_hash: str,
+    ) -> PasswordReset | None:
+        """Return a password reset record matching the token hash."""
+        stmt = select(PasswordReset).where(
+            PasswordReset.token_hash == token_hash
+        )
+        return self.db.scalar(stmt)
+
+    def get_active_by_token_hash(
+        self,
+        *,
+        token_hash: str,
+        now: datetime,
+    ) -> PasswordReset | None:
+        """Return an unused and unexpired reset record by token hash."""
+        stmt = select(PasswordReset).where(
+            PasswordReset.token_hash == token_hash,
+            PasswordReset.is_used.is_(False),
+            PasswordReset.expires_at > now,
+        )
+
+        return self.db.scalar(stmt)
+
+    def get_latest_by_user(
+        self,
+        *,
+        user_id: UUID,
+    ) -> PasswordReset | None:
+        """Return the most recently created reset record for a user."""
+        stmt = (
+            select(PasswordReset)
+            .where(PasswordReset.user_id == user_id)
+            .order_by(PasswordReset.created_at.desc())
+            .limit(1)
+        )
+
+        return self.db.scalar(stmt)
+
+    def mark_used(
+        self,
+        reset: PasswordReset,
+        *,
+        used_at: datetime,
+    ) -> PasswordReset:
+        """Mark a password reset record as used."""
+        reset.is_used = True
+        reset.used_at = used_at
+
+        self.db.flush()
+        self.db.refresh(reset)
+
+        return reset
+
+
+============================================================
+FILE: app/repositories/token_repository.py
+============================================================
+"""
+BuildOS Auth Service
+Refresh Token Repository
+"""
+
+from datetime import datetime
+from uuid import UUID
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.models.refresh_token import RefreshToken
+
+
+class TokenRepository:
+    """Database access for refresh tokens."""
+
+    def __init__(self, db: Session) -> None:
+        self.db = db
+
+    def create(  # pylint: disable=too-many-arguments
+        self,
+        *,
+        user_id: UUID,
+        token_hash: str,
+        expires_at: datetime,
+        context_type: str = "PERSONAL",
+        organization_id: UUID | None = None,
+        membership_id: UUID | None = None,
+    ) -> RefreshToken:
+        """Create and persist a refresh token."""
+        token = RefreshToken(
+            user_id=user_id,
+            token_hash=token_hash,
+            expires_at=expires_at,
+            context_type=context_type,
+            organization_id=organization_id,
+            membership_id=membership_id,
+        )
+
+        self.db.add(token)
+        self.db.flush()
+        self.db.refresh(token)
+
+        return token
+
+    def get_by_token_hash(
+        self,
+        token_hash: str,
+    ) -> RefreshToken | None:
+        """Return a refresh token by its token hash."""
+        stmt = select(RefreshToken).where(
+            RefreshToken.token_hash == token_hash,
+        )
+
+        return self.db.scalar(stmt)
+
+    def get_active_by_token_hash(
+        self,
+        *,
+        token_hash: str,
+        now: datetime,
+    ) -> RefreshToken | None:
+        """Return an active, non-expired refresh token by hash."""
+        stmt = select(RefreshToken).where(
+            RefreshToken.token_hash == token_hash,
+            RefreshToken.is_revoked.is_(False),
+            RefreshToken.expires_at > now,
+        )
+
+        return self.db.scalar(stmt)
+
+    def get_active_by_user(
+        self,
+        *,
+        user_id: UUID,
+        context_type: str | None = None,
+        organization_id: UUID | None = None,
+        membership_id: UUID | None = None,
+    ) -> list[RefreshToken]:
+        """Return active refresh tokens matching the requested scope."""
+        stmt = select(RefreshToken).where(
+            RefreshToken.user_id == user_id,
+            RefreshToken.is_revoked.is_(False),
+        )
+
+        if context_type is not None:
+            stmt = stmt.where(
+                RefreshToken.context_type == context_type,
+            )
+
+        if organization_id is not None:
+            stmt = stmt.where(
+                RefreshToken.organization_id == organization_id,
+            )
+
+        if membership_id is not None:
+            stmt = stmt.where(
+                RefreshToken.membership_id == membership_id,
+            )
+
+        stmt = stmt.order_by(
+            RefreshToken.created_at.desc(),
+        )
+
+        return list(self.db.scalars(stmt).all())
+
+    def revoke(
+        self,
+        token: RefreshToken,
+        *,
+        revoked_at: datetime,
+    ) -> RefreshToken:
+        """Revoke a single refresh token."""
+        token.is_revoked = True
+        token.revoked_at = revoked_at
+
+        self.db.flush()
+        self.db.refresh(token)
+
+        return token
+
+    def revoke_all_for_user(
+        self,
+        *,
+        user_id: UUID,
+        revoked_at: datetime,
+        context_type: str | None = None,
+        organization_id: UUID | None = None,
+        membership_id: UUID | None = None,
+    ) -> int:
+        """Revoke active refresh tokens matching the requested scope."""
+        stmt = select(RefreshToken).where(
+            RefreshToken.user_id == user_id,
+            RefreshToken.is_revoked.is_(False),
+        )
+
+        if context_type is not None:
+            stmt = stmt.where(
+                RefreshToken.context_type == context_type,
+            )
+
+        if organization_id is not None:
+            stmt = stmt.where(
+                RefreshToken.organization_id == organization_id,
+            )
+
+        if membership_id is not None:
+            stmt = stmt.where(
+                RefreshToken.membership_id == membership_id,
+            )
+
+        tokens = list(self.db.scalars(stmt).all())
+
+        for token in tokens:
+            token.is_revoked = True
+            token.revoked_at = revoked_at
+
+        self.db.flush()
+
+        return len(tokens)
+
+    def mark_used(
+        self,
+        token: RefreshToken,
+        *,
+        used_at: datetime,
+    ) -> RefreshToken:
+        """Record the latest usage time for a refresh token."""
+        token.last_used_at = used_at
+
+        self.db.flush()
+        self.db.refresh(token)
+
+        return token
+
+    def rotate(
+        self,
+        token: RefreshToken,
+        *,
+        replacement_token_id: UUID,
+        revoked_at: datetime,
+    ) -> RefreshToken:
+        """Revoke a token and link it to its replacement token."""
+        token.is_revoked = True
+        token.revoked_at = revoked_at
+        token.replaced_by_token_id = replacement_token_id
+
+        self.db.flush()
+        self.db.refresh(token)
+
+        return token
+
+
+============================================================
+FILE: app/schemas/auth.py
+============================================================
+"""
+BuildOS Auth Service
+Authentication Schemas
+"""
+
+from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class LoginRequest(BaseModel):
+    """
+    Authentication login request.
+
+    `identifier` may be an email address or phone number.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    identifier: str = Field(
+        min_length=1,
+        max_length=320,
+    )
+
+    password: str = Field(
+        min_length=1,
+        max_length=1024,
+    )
+
+
+class LoginResponse(BaseModel):
+    """
+    Authentication result returned after successful login.
+
+    Token fields will be populated when the token service is implemented.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    authenticated: bool
+    user_id: UUID
+    access_token: str | None = None
+    refresh_token: str | None = None
+    token_type: str = "bearer"
+
+============================================================
+FILE: app/schemas/password.py
+============================================================
+"""
+BuildOS Auth Service
+Password Management Schemas
+"""
+
+from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+
+class ChangePasswordRequest(BaseModel):
+    """Request to change the authenticated user's password."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    current_password: str = Field(min_length=1, max_length=128)
+    new_password: str = Field(min_length=8, max_length=128)
+
+    @field_validator("new_password")
+    @classmethod
+    def validate_new_password(cls, value: str) -> str:
+        """Reject passwords consisting only of whitespace."""
+        if not value.strip():
+            raise ValueError("Password must not be blank.")
+
+        return value
+
+
+class ChangePasswordResponse(BaseModel):
+    """Response returned after a successful password change."""
+
+    changed: bool
+    user_id: UUID
+
+
+class PasswordResetRequest(BaseModel):
+    """Request a password reset using email or phone."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    identifier: str = Field(min_length=1, max_length=255)
+
+    @field_validator("identifier")
+    @classmethod
+    def validate_identifier(cls, value: str) -> str:
+        """Reject blank identifiers."""
+        normalized = value.strip()
+
+        if not normalized:
+            raise ValueError("Identifier must not be blank.")
+
+        return normalized
+
+
+class PasswordResetRequestResponse(BaseModel):
+    """Response for a password-reset request."""
+
+    requested: bool
+
+
+class PasswordResetConfirmRequest(BaseModel):
+    """Complete a password reset with a single-use token."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    reset_token: str = Field(min_length=1, max_length=512)
+    new_password: str = Field(min_length=8, max_length=128)
+
+    @field_validator("reset_token")
+    @classmethod
+    def validate_reset_token(cls, value: str) -> str:
+        """Reject blank reset tokens."""
+        if not value.strip():
+            raise ValueError("Reset token must not be blank.")
+
+        return value
+
+    @field_validator("new_password")
+    @classmethod
+    def validate_new_password(cls, value: str) -> str:
+        """Reject passwords consisting only of whitespace."""
+        if not value.strip():
+            raise ValueError("Password must not be blank.")
+
+        return value
+
+
+class PasswordResetConfirmResponse(BaseModel):
+    """Response returned after completing a password reset."""
+
+    reset: bool
+    user_id: UUID
+
+
+============================================================
+FILE: app/schemas/security.py
+============================================================
+
+
+============================================================
+FILE: app/schemas/token.py
+============================================================
+"""
+BuildOS Auth Service
+Token Schemas
+"""
+
+from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class TokenRefreshRequest(BaseModel):
+    """
+    Request to rotate an existing refresh token.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    refresh_token: str = Field(
+        min_length=1,
+        max_length=4096,
+    )
+
+
+class TokenRefreshResponse(BaseModel):
+    """
+    Newly issued access and refresh tokens.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+
+
+class TokenRevokeRequest(BaseModel):
+    """
+    Request to revoke a single refresh token.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    refresh_token: str = Field(
+        min_length=1,
+        max_length=4096,
+    )
+
+
+class TokenRevokeResponse(BaseModel):
+    """
+    Result of a refresh-token revocation.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    revoked: bool
+
+
+class TokenUserContext(BaseModel):
+    """
+    Authentication context associated with a token.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    user_id: UUID
+    context_type: str = "PERSONAL"
+    organization_id: UUID | None = None
+    membership_id: UUID | None = None
+
+
+============================================================
+FILE: app/security/authentication.py
+============================================================
+"""
+BuildOS Auth Service
+Authentication State Security
+"""
+
+from datetime import UTC, datetime
+
+from app.models.auth_credential import AuthCredential
+
+
+def is_credential_active(
+    credential: AuthCredential,
+) -> bool:
+    """
+    Return True when the credential belongs to an active account.
+    """
+    return credential.is_active
+
+
+def is_credential_locked(
+    credential: AuthCredential,
+    *,
+    now: datetime | None = None,
+) -> bool:
+    """
+    Determine whether a credential is currently locked.
+
+    A permanent lock has no locked_until value.
+
+    A temporary lock remains active until locked_until.
+    Once the lock expires, the credential is considered unlocked.
+    """
+    if not credential.is_locked:
+        return False
+
+    if credential.locked_until is None:
+        return True
+
+    current_time = now or datetime.now(UTC)
+
+    return credential.locked_until > current_time
+
+
+def can_authenticate(
+    credential: AuthCredential,
+    *,
+    now: datetime | None = None,
+) -> bool:
+    """
+    Determine whether a credential is currently eligible
+    for password authentication.
+    """
+    if not is_credential_active(credential):
+        return False
+
+    return not is_credential_locked(credential, now=now)
+
+
+def lock_has_expired(
+    credential: AuthCredential,
+    *,
+    now: datetime | None = None,
+) -> bool:
+    """
+    Determine whether a temporary credential lock has expired.
+    """
+    if not credential.is_locked:
+        return False
+
+    if credential.locked_until is None:
+        return False
+
+    current_time = now or datetime.now(UTC)
+
+    return credential.locked_until <= current_time
+
+
+def should_clear_expired_lock(
+    credential: AuthCredential,
+    *,
+    now: datetime | None = None,
+) -> bool:
+    """
+    Determine whether an expired temporary lock should be cleared.
+    """
+    return lock_has_expired(credential, now=now)
+
+
+============================================================
+FILE: app/security/password_hashing.py
+============================================================
+"""
+BuildOS Auth Service
+Password Hashing Security
+"""
+
+from argon2 import PasswordHasher
+from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
+
+_password_hasher = PasswordHasher()
+
+
+def hash_password(password: str) -> str:
+    """
+    Hash a plaintext password using Argon2.
+
+    The plaintext password must never be persisted.
+    """
+    return _password_hasher.hash(password)
+
+
+def verify_password(
+    password: str,
+    password_hash: str,
+) -> bool:
+    """
+    Verify a plaintext password against an Argon2 password hash.
+
+    Returns False when the password does not match or the stored
+    hash cannot be verified.
+    """
+    try:
+        return _password_hasher.verify(password_hash, password)
+    except (VerifyMismatchError, VerificationError, InvalidHashError):
+        return False
+
+
+def needs_rehash(password_hash: str) -> bool:
+    """
+    Determine whether a stored password hash should be regenerated
+    using the current Argon2 parameters.
+    """
+    return _password_hasher.check_needs_rehash(password_hash)
+
+
+============================================================
+FILE: app/security/rate_limiting.py
+============================================================
+"""
+BuildOS Auth Service
+Authentication Rate Limiting
+"""
+
+from datetime import UTC, datetime, timedelta
+
+from app.core.config import settings
+
+
+def get_attempt_window_start(
+    *,
+    now: datetime | None = None,
+) -> datetime:
+    """
+    Return the beginning of the rolling login-attempt window.
+    """
+    current_time = now or datetime.now(UTC)
+
+    return current_time - timedelta(
+        minutes=settings.login_rate_limit_window_minutes,
+    )
+
+
+def is_login_rate_limited(
+    failed_attempts: int,
+) -> bool:
+    """
+    Determine whether the failed-attempt threshold has been reached.
+    """
+    return failed_attempts >= settings.max_failed_login_attempts
+
+
+def should_lock_account(
+    failed_attempts: int,
+) -> bool:
+    """
+    Determine whether the account should be temporarily locked.
+    """
+    return is_login_rate_limited(failed_attempts)
+
+
+def get_lock_expiration(
+    *,
+    now: datetime | None = None,
+) -> datetime:
+    """
+    Calculate when a temporary account lock should expire.
+    """
+    current_time = now or datetime.now(UTC)
+
+    return current_time + timedelta(
+        minutes=settings.login_lockout_minutes,
+    )
+
+============================================================
+FILE: app/security/token_signing.py
+============================================================
+"""
+BuildOS Auth Service
+JWT Token Signing
+"""
+
+from datetime import UTC, datetime, timedelta
+from uuid import UUID, uuid4
+
+import jwt
+
+from app.core.config import get_settings
+from app.core.constants import TOKEN_TYPE_ACCESS, TOKEN_TYPE_REFRESH
+
+
+def create_access_token(
+    *,
+    user_id: UUID,
+    context_type: str = "PERSONAL",
+    organization_id: UUID | None = None,
+    membership_id: UUID | None = None,
+    now: datetime | None = None,
+) -> str:
+    """
+    Create a signed JWT access token.
+
+    The token contains only authentication/context claims.
+    No sensitive user information is embedded in the JWT.
+    """
+    settings = get_settings()
+    issued_at = now or datetime.now(UTC)
+    expires_at = issued_at + timedelta(
+        minutes=settings.access_token_expire_minutes
+    )
+
+    payload: dict[str, object] = {
+        "sub": str(user_id),
+        "iss": settings.jwt_issuer,
+        "aud": settings.jwt_audience,
+        "iat": issued_at,
+        "exp": expires_at,
+        "jti": str(uuid4()),
+        "token_type": TOKEN_TYPE_ACCESS,
+        "context_type": context_type,
+    }
+
+    if organization_id is not None:
+        payload["organization_id"] = str(organization_id)
+
+    if membership_id is not None:
+        payload["membership_id"] = str(membership_id)
+
+    return jwt.encode(
+        payload,
+        settings.jwt_secret_key,
+        algorithm=settings.jwt_algorithm,
+    )
+
+
+def create_refresh_token(
+    *,
+    user_id: UUID,
+    context_type: str = "PERSONAL",
+    organization_id: UUID | None = None,
+    membership_id: UUID | None = None,
+    now: datetime | None = None,
+) -> str:
+    """
+    Create a signed JWT refresh token.
+
+    The token contains only authentication/context claims.
+    No sensitive user information is embedded in the JWT.
+    """
+    settings = get_settings()
+    issued_at = now or datetime.now(UTC)
+    expires_at = issued_at + timedelta(
+        days=settings.refresh_token_expire_days
+    )
+
+    payload: dict[str, object] = {
+        "sub": str(user_id),
+        "iss": settings.jwt_issuer,
+        "aud": settings.jwt_audience,
+        "iat": issued_at,
+        "exp": expires_at,
+        "jti": str(uuid4()),
+        "token_type": TOKEN_TYPE_REFRESH,
+        "context_type": context_type,
+    }
+
+    if organization_id is not None:
+        payload["organization_id"] = str(organization_id)
+
+    if membership_id is not None:
+        payload["membership_id"] = str(membership_id)
+
+    return jwt.encode(
+        payload,
+        settings.jwt_secret_key,
+        algorithm=settings.jwt_algorithm,
+    )
+
+
+============================================================
+FILE: app/security/token_validation.py
+============================================================
+"""
+BuildOS Auth Service
+JWT Token Validation
+"""
+
+from uuid import UUID
+
+import jwt
+
+from app.core.config import get_settings
+from app.core.constants import TOKEN_TYPE_ACCESS, TOKEN_TYPE_REFRESH
+from app.core.exceptions import ExpiredTokenError, InvalidTokenError
+
+
+def validate_access_token(token: str) -> dict[str, object]:
+    """
+    Validate and decode an access token.
+
+    Signature, issuer, audience, expiration, and token type
+    are all validated before claims are returned.
+    """
+    settings = get_settings()
+
+    try:
+        payload = jwt.decode(
+            token,
+            settings.jwt_secret_key,
+            algorithms=[settings.jwt_algorithm],
+            issuer=settings.jwt_issuer,
+            audience=settings.jwt_audience,
+            options={
+                "require": [
+                    "sub",
+                    "iss",
+                    "aud",
+                    "iat",
+                    "exp",
+                    "jti",
+                    "token_type",
+                ]
+            },
+        )
+    except jwt.ExpiredSignatureError as exc:
+        raise ExpiredTokenError("Access token has expired.") from exc
+    except jwt.InvalidTokenError as exc:
+        raise InvalidTokenError("Invalid access token.") from exc
+
+    if payload.get("token_type") != TOKEN_TYPE_ACCESS:
+        raise InvalidTokenError("Invalid token type.")
+
+    subject = payload.get("sub")
+
+    if not isinstance(subject, str):
+        raise InvalidTokenError("Token subject is invalid.")
+
+    try:
+        UUID(subject)
+    except ValueError as exc:
+        raise InvalidTokenError("Token subject is invalid.") from exc
+
+    return payload
+
+
+def validate_refresh_token(token: str) -> dict[str, object]:
+    """
+    Validate and decode a refresh token.
+
+    Signature, issuer, audience, expiration, and token type
+    are all validated before claims are returned.
+    """
+    settings = get_settings()
+
+    try:
+        payload = jwt.decode(
+            token,
+            settings.jwt_secret_key,
+            algorithms=[settings.jwt_algorithm],
+            issuer=settings.jwt_issuer,
+            audience=settings.jwt_audience,
+            options={
+                "require": [
+                    "sub",
+                    "iss",
+                    "aud",
+                    "iat",
+                    "exp",
+                    "jti",
+                    "token_type",
+                ]
+            },
+        )
+    except jwt.ExpiredSignatureError as exc:
+        raise ExpiredTokenError("Refresh token has expired.") from exc
+    except jwt.InvalidTokenError as exc:
+        raise InvalidTokenError("Invalid refresh token.") from exc
+
+    if payload.get("token_type") != TOKEN_TYPE_REFRESH:
+        raise InvalidTokenError("Invalid token type.")
+
+    subject = payload.get("sub")
+
+    if not isinstance(subject, str):
+        raise InvalidTokenError("Token subject is invalid.")
+
+    try:
+        UUID(subject)
+    except ValueError as exc:
+        raise InvalidTokenError("Token subject is invalid.") from exc
+
+    return payload
+
+
+============================================================
+FILE: app/services/authentication_service.py
+============================================================
+"""
+BuildOS Auth Service
+Authentication Service
+"""
+
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from uuid import UUID
+
+from app.models.auth_credential import AuthCredential
+from app.repositories.credential_repository import CredentialRepository
+from app.repositories.event_repository import EventRepository
+from app.repositories.login_attempt_repository import LoginAttemptRepository
+from app.security.authentication import is_credential_locked
+from app.security.password_hashing import verify_password
+from app.security.rate_limiting import (
+    get_lock_expiration,
+    should_lock_account,
+)
+
+
+@dataclass(frozen=True)
+class AuthenticationContext:
+    """
+    Authentication request context.
+    """
+
+    context_type: str = "PERSONAL"
+    organization_id: UUID | None = None
+    membership_id: UUID | None = None
+    ip_address: str | None = None
+    user_agent: str | None = None
+
+
+@dataclass(frozen=True)
+class AuthenticationResult:
+    """
+    Result of an authentication attempt.
+    """
+
+    authenticated: bool
+    user_id: UUID | None
+    credential: AuthCredential | None
+    failure_reason: str | None = None
+
+
+class AuthenticationService:
+    """
+    Orchestrates authentication against the authentication repository layer.
+
+    This service owns authentication workflow decisions but does not contain
+    raw database queries or low-level password hashing/token implementation.
+    """
+
+    def __init__(
+        self,
+        *,
+        credential_repository: CredentialRepository,
+        login_attempt_repository: LoginAttemptRepository,
+        event_repository: EventRepository,
+    ) -> None:
+        self.credential_repository = credential_repository
+        self.login_attempt_repository = login_attempt_repository
+        self.event_repository = event_repository
+
+    def authenticate(
+        self,
+        *,
+        user_id: UUID,
+        password: str,
+        identifier: str,
+        context_type: str = "PERSONAL",
+        organization_id: UUID | None = None,
+        membership_id: UUID | None = None,
+        ip_address: str | None = None,
+        user_agent: str | None = None,
+        now: datetime | None = None,
+    ) -> AuthenticationResult:
+        """
+        Authenticate a user using an already-resolved user identity.
+        """
+
+        current_time = now or datetime.now(UTC)
+
+        context = AuthenticationContext(
+            context_type=context_type,
+            organization_id=organization_id,
+            membership_id=membership_id,
+            ip_address=ip_address,
+            user_agent=user_agent,
+        )
+
+        credential = self.credential_repository.get_by_user_id(user_id)
+
+        if credential is None:
+            self._record_failed_attempt(
+                identifier=identifier,
+                user_id=None,
+                context=context,
+                failure_reason="INVALID_CREDENTIALS",
+            )
+
+            return AuthenticationResult(
+                authenticated=False,
+                user_id=None,
+                credential=None,
+                failure_reason="INVALID_CREDENTIALS",
+            )
+
+        if not credential.is_active:
+            self._record_failed_attempt(
+                identifier=identifier,
+                user_id=user_id,
+                context=context,
+                failure_reason="CREDENTIAL_INACTIVE",
+            )
+
+            return AuthenticationResult(
+                authenticated=False,
+                user_id=user_id,
+                credential=credential,
+                failure_reason="CREDENTIAL_INACTIVE",
+            )
+
+        if is_credential_locked(credential, now=current_time):
+            self._record_failed_attempt(
+                identifier=identifier,
+                user_id=user_id,
+                context=context,
+                failure_reason="ACCOUNT_LOCKED",
+            )
+
+            return AuthenticationResult(
+                authenticated=False,
+                user_id=user_id,
+                credential=credential,
+                failure_reason="ACCOUNT_LOCKED",
+            )
+
+        if not verify_password(password, credential.password_hash):
+            updated_credential = self._handle_failed_password(
+                credential=credential,
+                identifier=identifier,
+                user_id=user_id,
+                context=context,
+                now=current_time,
+            )
+
+            failure_reason = (
+                "ACCOUNT_LOCKED"
+                if updated_credential.is_locked
+                else "INVALID_CREDENTIALS"
+            )
+
+            return AuthenticationResult(
+                authenticated=False,
+                user_id=user_id,
+                credential=updated_credential,
+                failure_reason=failure_reason,
+            )
+
+        self.credential_repository.record_successful_login(
+            credential,
+            login_at=current_time,
+        )
+
+        self.login_attempt_repository.create(
+            identifier=identifier,
+            user_id=user_id,
+            successful=True,
+            context_type=context.context_type,
+            organization_id=context.organization_id,
+            membership_id=context.membership_id,
+            ip_address=context.ip_address,
+            user_agent=context.user_agent,
+        )
+
+        self.event_repository.create_auth_event(
+            user_id=user_id,
+            context_type=context.context_type,
+            event_type="LOGIN_SUCCESS",
+            organization_id=context.organization_id,
+            membership_id=context.membership_id,
+            ip_address=context.ip_address,
+            user_agent=context.user_agent,
+        )
+
+        return AuthenticationResult(
+            authenticated=True,
+            user_id=user_id,
+            credential=credential,
+        )
+
+    def _handle_failed_password(
+        self,
+        *,
+        credential: AuthCredential,
+        identifier: str,
+        user_id: UUID,
+        context: AuthenticationContext,
+        now: datetime,
+    ) -> AuthCredential:
+        """
+        Record a failed password attempt and apply account lockout when needed.
+        """
+
+        credential = self.credential_repository.record_failed_login(
+            credential,
+        )
+
+        self.login_attempt_repository.create(
+            identifier=identifier,
+            user_id=user_id,
+            successful=False,
+            context_type=context.context_type,
+            organization_id=context.organization_id,
+            membership_id=context.membership_id,
+            ip_address=context.ip_address,
+            user_agent=context.user_agent,
+            failure_reason="INVALID_CREDENTIALS",
+        )
+
+        if should_lock_account(credential.failed_login_count):
+            credential = self.credential_repository.lock(
+                credential,
+                locked_until=get_lock_expiration(now=now),
+            )
+
+            self.event_repository.create_security_event(
+                user_id=user_id,
+                context_type=context.context_type,
+                event_type="ACCOUNT_LOCKED",
+                severity="warning",
+                description="Account locked after repeated failed login attempts.",
+                organization_id=context.organization_id,
+                membership_id=context.membership_id,
+                ip_address=context.ip_address,
+                user_agent=context.user_agent,
+            )
+
+        else:
+            self.event_repository.create_auth_event(
+                user_id=user_id,
+                context_type=context.context_type,
+                event_type="LOGIN_FAILURE",
+                organization_id=context.organization_id,
+                membership_id=context.membership_id,
+                ip_address=context.ip_address,
+                user_agent=context.user_agent,
+                metadata_json='{"reason":"INVALID_CREDENTIALS"}',
+            )
+
+        return credential
+
+    def _record_failed_attempt(
+        self,
+        *,
+        identifier: str,
+        user_id: UUID | None,
+        context: AuthenticationContext,
+        failure_reason: str,
+    ) -> None:
+        """
+        Record an authentication failure without exposing sensitive details.
+        """
+
+        self.login_attempt_repository.create(
+            identifier=identifier,
+            user_id=user_id,
+            successful=False,
+            context_type=context.context_type,
+            organization_id=context.organization_id,
+            membership_id=context.membership_id,
+            ip_address=context.ip_address,
+            user_agent=context.user_agent,
+            failure_reason=failure_reason,
+        )
+
+        self.event_repository.create_auth_event(
+            user_id=user_id,
+            context_type=context.context_type,
+            event_type="LOGIN_FAILURE",
+            organization_id=context.organization_id,
+            membership_id=context.membership_id,
+            ip_address=context.ip_address,
+            user_agent=context.user_agent,
+            metadata_json=f'{{"reason":"{failure_reason}"}}',
+        )
+
+============================================================
+FILE: app/services/login_service.py
+============================================================
+"""
+BuildOS Auth Service
+Login Orchestration Service
+"""
+
+from dataclasses import dataclass
+from uuid import UUID
+
+from app.core.exceptions import InvalidCredentialsError
+from app.integrations.user_service import UserService
+from app.services.authentication_service import (
+    AuthenticationResult,
+    AuthenticationService,
+)
+
+
+@dataclass(frozen=True)
+class LoginResult:
+    """
+    Result of the login orchestration.
+    """
+
+    authentication: AuthenticationResult
+
+
+class LoginService:
+    """
+    Orchestrates identifier resolution and authentication.
+
+    User identity resolution belongs to the User Service.
+    Credential verification belongs to the Auth Service.
+    """
+
+    def __init__(
+        self,
+        *,
+        user_service: UserService,
+        authentication_service: AuthenticationService,
+    ) -> None:
+        self.user_service = user_service
+        self.authentication_service = authentication_service
+
+    def login(
+        self,
+        *,
+        identifier: str,
+        password: str,
+        context_type: str = "PERSONAL",
+        organization_id: UUID | None = None,
+        membership_id: UUID | None = None,
+        ip_address: str | None = None,
+        user_agent: str | None = None,
+    ) -> LoginResult:
+        """
+        Resolve the identifier and authenticate the corresponding user.
+        """
+
+        user_id = self.user_service.resolve_identifier(
+            identifier=identifier,
+        )
+
+        if user_id is None:
+            raise InvalidCredentialsError(
+                "Invalid credentials."
+            )
+
+        authentication = self.authentication_service.authenticate(
+            user_id=user_id,
+            password=password,
+            identifier=identifier,
+            context_type=context_type,
+            organization_id=organization_id,
+            membership_id=membership_id,
+            ip_address=ip_address,
+            user_agent=user_agent,
+        )
+
+        if not authentication.authenticated:
+            raise InvalidCredentialsError(
+                "Invalid credentials."
+            )
+
+        return LoginResult(
+            authentication=authentication,
+        )
+    
+
+============================================================
+FILE: app/services/logout_service.py
+============================================================
+
+
+============================================================
+FILE: app/services/password_service.py
+============================================================
+"""
+BuildOS Auth Service
+Password Management Service
+"""
+
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from hashlib import sha256
+from secrets import token_urlsafe
+from uuid import UUID
+
+from app.core.config import get_settings
+from app.core.constants import (
+    CONTEXT_PERSONAL,
+    EVENT_PASSWORD_CHANGED,
+    EVENT_PASSWORD_RESET_COMPLETED,
+    EVENT_PASSWORD_RESET_REQUESTED,
+)
+from app.core.exceptions import (
+    InvalidCredentialsError,
+    PasswordResetError,
+)
+from app.integrations.user_service import UserService
+from app.repositories.credential_repository import CredentialRepository
+from app.repositories.event_repository import EventRepository
+from app.repositories.password_reset_repository import PasswordResetRepository
+from app.repositories.token_repository import TokenRepository
+from app.security.password_hashing import hash_password, verify_password
+
+
+@dataclass(frozen=True)
+class PasswordContext:
+    """Security context associated with a password operation."""
+
+    context_type: str = CONTEXT_PERSONAL
+    organization_id: UUID | None = None
+    membership_id: UUID | None = None
+    ip_address: str | None = None
+    user_agent: str | None = None
+
+
+@dataclass(frozen=True)
+class PasswordResetRequestResult:
+    """Result of a password reset request."""
+
+    requested: bool
+    reset_token: str | None = None
+
+
+@dataclass(frozen=True)
+class PasswordChangeResult:
+    """Result of a password change."""
+
+    changed: bool
+    user_id: UUID
+
+
+@dataclass(frozen=True)
+class PasswordResetResult:
+    """Result of a completed password reset."""
+
+    reset: bool
+    user_id: UUID
+
+
+class PasswordService:
+    """
+    Orchestrates password changes and password reset lifecycle.
+
+    Password hashes are persisted only through the credential repository.
+    Reset tokens are persisted only as hashes.
+    """
+
+    def __init__(
+        self,
+        *,
+        user_service: UserService,
+        credential_repository: CredentialRepository,
+        password_reset_repository: PasswordResetRepository,
+        token_repository: TokenRepository,
+        event_repository: EventRepository,
+    ) -> None:
+        self.user_service = user_service
+        self.credential_repository = credential_repository
+        self.password_reset_repository = password_reset_repository
+        self.token_repository = token_repository
+        self.event_repository = event_repository
+
+    def change_password(
+        self,
+        *,
+        user_id: UUID,
+        current_password: str,
+        new_password: str,
+        context: PasswordContext | None = None,
+        now: datetime | None = None,
+    ) -> PasswordChangeResult:
+        """Change an authenticated user's password."""
+        operation_context = context or PasswordContext()
+        current_time = now or datetime.now(UTC)
+
+        credential = self.credential_repository.get_by_user_id(user_id)
+
+        if credential is None:
+            raise InvalidCredentialsError("Invalid credentials.")
+
+        if not credential.is_active:
+            raise InvalidCredentialsError("Invalid credentials.")
+
+        if not verify_password(
+            current_password,
+            credential.password_hash,
+        ):
+            raise InvalidCredentialsError("Invalid credentials.")
+
+        if current_password == new_password:
+            raise InvalidCredentialsError(
+                "New password must differ from the current password."
+            )
+
+        updated_credential = self.credential_repository.update_password(
+            credential,
+            password_hash=hash_password(new_password),
+            changed_at=current_time,
+        )
+
+        self.token_repository.revoke_all_for_user(
+            user_id=user_id,
+            revoked_at=current_time,
+            context_type=operation_context.context_type,
+            organization_id=operation_context.organization_id,
+            membership_id=operation_context.membership_id,
+        )
+
+        self.event_repository.create_security_event(
+            user_id=user_id,
+            context_type=operation_context.context_type,
+            event_type=EVENT_PASSWORD_CHANGED,
+            severity="info",
+            description="User password changed successfully.",
+            organization_id=operation_context.organization_id,
+            membership_id=operation_context.membership_id,
+            ip_address=operation_context.ip_address,
+            user_agent=operation_context.user_agent,
+        )
+
+        return PasswordChangeResult(
+            changed=updated_credential.password_changed_at == current_time,
+            user_id=user_id,
+        )
+
+    def request_reset(
+        self,
+        *,
+        identifier: str,
+        ip_address: str | None = None,
+        now: datetime | None = None,
+    ) -> PasswordResetRequestResult:
+        """
+        Create a password reset request.
+
+        Unknown identifiers return the same outward result as known
+        identifiers to avoid account enumeration.
+        """
+        current_time = now or datetime.now(UTC)
+
+        user_id = self.user_service.resolve_identifier(
+            identifier=identifier,
+        )
+
+        if user_id is None:
+            return PasswordResetRequestResult(
+                requested=True,
+                reset_token=None,
+            )
+
+        reset_token = token_urlsafe(48)
+        token_hash = self.hash_reset_token(reset_token)
+
+        settings = get_settings()
+        expires_at = current_time + timedelta(
+            minutes=settings.password_reset_expire_minutes,
+        )
+
+        self.password_reset_repository.create(
+            user_id=user_id,
+            token_hash=token_hash,
+            expires_at=expires_at,
+            requested_ip=ip_address,
+        )
+
+        self.event_repository.create_security_event(
+            user_id=user_id,
+            context_type=CONTEXT_PERSONAL,
+            event_type=EVENT_PASSWORD_RESET_REQUESTED,
+            severity="info",
+            description="Password reset requested.",
+            ip_address=ip_address,
+        )
+
+        return PasswordResetRequestResult(
+            requested=True,
+            reset_token=reset_token,
+        )
+
+    def confirm_reset(
+        self,
+        *,
+        reset_token: str,
+        new_password: str,
+        ip_address: str | None = None,
+        user_agent: str | None = None,
+        now: datetime | None = None,
+    ) -> PasswordResetResult:
+        """Complete a password reset using a valid single-use token."""
+        current_time = now or datetime.now(UTC)
+
+        reset = self.password_reset_repository.get_active_by_token_hash(
+            token_hash=self.hash_reset_token(reset_token),
+            now=current_time,
+        )
+
+        if reset is None:
+            raise PasswordResetError("Invalid or expired reset token.")
+
+        credential = self.credential_repository.get_by_user_id(
+            reset.user_id,
+        )
+
+        if credential is None:
+            raise PasswordResetError("Password reset cannot be completed.")
+
+        self.credential_repository.update_password(
+            credential,
+            password_hash=hash_password(new_password),
+            changed_at=current_time,
+        )
+
+        self.password_reset_repository.mark_used(
+            reset,
+            used_at=current_time,
+        )
+
+        self.token_repository.revoke_all_for_user(
+            user_id=reset.user_id,
+            revoked_at=current_time, 
+            context_type=CONTEXT_PERSONAL,
+            organization_id=None,
+            membership_id=None,
+        )
+
+        self.event_repository.create_security_event(
+            user_id=reset.user_id,
+            context_type=CONTEXT_PERSONAL,
+            event_type=EVENT_PASSWORD_RESET_COMPLETED,
+            severity="info",
+            description="Password reset completed successfully.",
+            ip_address=ip_address,
+            user_agent=user_agent,
+        )
+
+        return PasswordResetResult(
+            reset=True,
+            user_id=reset.user_id,
+        )
+
+    @staticmethod
+    def hash_reset_token(token: str) -> str:
+        """Hash a password reset token before persistence."""
+        return sha256(token.encode("utf-8")).hexdigest()
+
+
+============================================================
+FILE: app/services/security_service.py
+============================================================
+
+
+============================================================
+FILE: app/services/token_service.py
+============================================================
+"""
+BuildOS Auth Service
+Token Lifecycle Service
+"""
+
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from hashlib import sha256
+from uuid import UUID
+
+from app.core.config import get_settings
+from app.core.constants import (
+    CONTEXT_PERSONAL,
+    EVENT_TOKEN_REFRESH,
+    EVENT_TOKEN_REVOKED,
+)
+from app.core.exceptions import (
+    ExpiredTokenError,
+    InvalidTokenError,
+    RevokedTokenError,
+)
+from app.repositories.event_repository import EventRepository
+from app.repositories.token_repository import TokenRepository
+from app.security.token_signing import (
+    create_access_token,
+    create_refresh_token,
+)
+from app.security.token_validation import validate_refresh_token
+
+
+@dataclass(frozen=True)
+class TokenPair:
+    """Issued access and refresh token pair."""
+
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+
+
+class TokenService:
+    """
+    Orchestrates JWT issuance and persisted refresh-token lifecycle.
+
+    JWT signing and validation remain delegated to the security layer.
+    Database persistence remains delegated to repositories.
+    """
+
+    def __init__(
+        self,
+        *,
+        token_repository: TokenRepository,
+        event_repository: EventRepository,
+    ) -> None:
+        self.token_repository = token_repository
+        self.event_repository = event_repository
+
+    @staticmethod
+    def hash_refresh_token(token: str) -> str:
+        """
+        Hash a refresh token for database persistence.
+
+        The raw refresh token is never persisted.
+        """
+        return sha256(token.encode("utf-8")).hexdigest()
+
+    def issue_tokens(
+        self,
+        *,
+        user_id: UUID,
+        context_type: str = CONTEXT_PERSONAL,
+        organization_id: UUID | None = None,
+        membership_id: UUID | None = None,
+        ip_address: str | None = None,
+        user_agent: str | None = None,
+        now: datetime | None = None,
+    ) -> TokenPair:
+        """
+        Issue a new access/refresh token pair and persist refresh state.
+        """
+        settings = get_settings()
+        issued_at = now or datetime.now(UTC)
+
+        access_token = create_access_token(
+            user_id=user_id,
+            context_type=context_type,
+            organization_id=organization_id,
+            membership_id=membership_id,
+            now=issued_at,
+        )
+
+        refresh_token = create_refresh_token(
+            user_id=user_id,
+            context_type=context_type,
+            organization_id=organization_id,
+            membership_id=membership_id,
+            now=issued_at,
+        )
+
+        expires_at = issued_at + timedelta(
+            days=settings.refresh_token_expire_days,
+        )
+
+        self.token_repository.create(
+            user_id=user_id,
+            token_hash=self.hash_refresh_token(refresh_token),
+            expires_at=expires_at,
+            context_type=context_type,
+            organization_id=organization_id,
+            membership_id=membership_id,
+        )
+
+        return TokenPair(
+            access_token=access_token,
+            refresh_token=refresh_token,
+        )
+
+    def refresh(
+        self,
+        *,
+        refresh_token: str,
+        ip_address: str | None = None,
+        user_agent: str | None = None,
+        now: datetime | None = None,
+    ) -> TokenPair:
+        """
+        Validate, rotate, and replace a refresh token.
+
+        The presented refresh token must be:
+        - cryptographically valid
+        - unexpired
+        - the correct token type
+        - present in the database
+        - active and not revoked
+        """
+        current_time = now or datetime.now(UTC)
+
+        payload = validate_refresh_token(refresh_token)
+
+        subject = payload.get("sub")
+
+        if not isinstance(subject, str):
+            raise InvalidTokenError("Token subject is invalid.")
+
+        try:
+            user_id = UUID(subject)
+        except ValueError as exc:
+            raise InvalidTokenError("Token subject is invalid.") from exc
+
+        token_hash = self.hash_refresh_token(refresh_token)
+
+        stored_token = self.token_repository.get_by_token_hash(
+            token_hash,
+        )
+
+        if stored_token is None:
+            raise InvalidTokenError("Refresh token is not recognized.")
+
+        if stored_token.is_revoked:
+            raise RevokedTokenError("Refresh token has been revoked.")
+
+        if stored_token.expires_at <= current_time:
+            raise ExpiredTokenError("Refresh token has expired.")
+
+        if stored_token.user_id != user_id:
+            raise InvalidTokenError("Refresh token subject does not match.")
+
+        context_type = payload.get("context_type", CONTEXT_PERSONAL)
+
+        if not isinstance(context_type, str):
+            raise InvalidTokenError("Token context is invalid.")
+
+        organization_id = self._optional_uuid_claim(
+            payload,
+            "organization_id",
+        )
+        membership_id = self._optional_uuid_claim(
+            payload,
+            "membership_id",
+        )
+
+        replacement = self.issue_tokens(
+            user_id=user_id,
+            context_type=context_type,
+            organization_id=organization_id,
+            membership_id=membership_id,
+            ip_address=ip_address,
+            user_agent=user_agent,
+            now=current_time,
+        )
+
+        replacement_id = self._get_replacement_token_id(
+            replacement.refresh_token,
+        )
+
+        self.token_repository.rotate(
+            stored_token,
+            replacement_token_id=replacement_id,
+            revoked_at=current_time,
+        )
+
+        self.token_repository.mark_used(
+            stored_token,
+            used_at=current_time,
+        )
+
+        self.event_repository.create_auth_event(
+            user_id=user_id,
+            context_type=context_type,
+            event_type=EVENT_TOKEN_REFRESH,
+            organization_id=organization_id,
+            membership_id=membership_id,
+            ip_address=ip_address,
+            user_agent=user_agent,
+        )
+
+        return replacement
+
+    def revoke(
+        self,
+        *,
+        refresh_token: str,
+        ip_address: str | None = None,
+        user_agent: str | None = None,
+        now: datetime | None = None,
+    ) -> None:
+        """
+        Revoke one persisted refresh token.
+        """
+        current_time = now or datetime.now(UTC)
+
+        payload = validate_refresh_token(refresh_token)
+
+        subject = payload.get("sub")
+
+        if not isinstance(subject, str):
+            raise InvalidTokenError("Token subject is invalid.")
+
+        try:
+            user_id = UUID(subject)
+        except ValueError as exc:
+            raise InvalidTokenError("Token subject is invalid.") from exc
+
+        token_hash = self.hash_refresh_token(refresh_token)
+
+        stored_token = self.token_repository.get_by_token_hash(
+            token_hash,
+        )
+
+        if stored_token is None:
+            raise InvalidTokenError("Refresh token is not recognized.")
+
+        if stored_token.is_revoked:
+            raise RevokedTokenError("Refresh token has already been revoked.")
+
+        self.token_repository.revoke(
+            stored_token,
+            revoked_at=current_time,
+        )
+
+        context_type = payload.get("context_type", CONTEXT_PERSONAL)
+
+        if not isinstance(context_type, str):
+            context_type = CONTEXT_PERSONAL
+
+        organization_id = self._optional_uuid_claim(
+            payload,
+            "organization_id",
+        )
+        membership_id = self._optional_uuid_claim(
+            payload,
+            "membership_id",
+        )
+
+        self.event_repository.create_auth_event(
+            user_id=user_id,
+            context_type=context_type,
+            event_type=EVENT_TOKEN_REVOKED,
+            organization_id=organization_id,
+            membership_id=membership_id,
+            ip_address=ip_address,
+            user_agent=user_agent,
+        )
+
+    def revoke_all(
+        self,
+        *,
+        user_id: UUID,
+        context_type: str | None = None,
+        organization_id: UUID | None = None,
+        membership_id: UUID | None = None,
+        revoked_at: datetime | None = None,
+    ) -> int:
+        """
+        Revoke all active refresh tokens belonging to a user.
+
+        Context filtering will be added when the repository exposes
+        context-specific bulk revocation.
+        """
+        current_time = revoked_at or datetime.now(UTC)
+
+        return self.token_repository.revoke_all_for_user(
+            user_id=user_id,
+            revoked_at=current_time,
+            context_type=context_type,
+            organization_id=organization_id,
+            membership_id=membership_id,
+        )
+    def _get_replacement_token_id(
+        self,
+        refresh_token: str,
+    ) -> UUID:
+        """
+        Resolve the persisted ID of a newly issued refresh token.
+        """
+        token_hash = self.hash_refresh_token(refresh_token)
+
+        replacement = self.token_repository.get_by_token_hash(
+            token_hash,
+        )
+
+        if replacement is None:
+            raise InvalidTokenError(
+                "Replacement refresh token could not be persisted.",
+            )
+
+        return replacement.id
+
+    @staticmethod
+    def _optional_uuid_claim(
+        payload: dict[str, object],
+        claim_name: str,
+    ) -> UUID | None:
+        """
+        Parse an optional UUID claim from JWT payload.
+        """
+        value = payload.get(claim_name)
+
+        if value is None:
+            return None
+
+        if not isinstance(value, str):
+            raise InvalidTokenError(
+                f"Token claim '{claim_name}' is invalid.",
+            )
+
+        try:
+            return UUID(value)
+        except ValueError as exc:
+            raise InvalidTokenError(
+                f"Token claim '{claim_name}' is invalid.",
+            ) from exc
+
+
+============================================================
+FILE: docs/architecture/IMPLEMENTATION_CHECKPOINT.md
+============================================================
+# 018 — BuildOS Authentication Service
+# Implementation Checkpoint
+
+## 1. Document Information
+
+| Field | Value |
+|---|---|
+| Repository | `018-buildos-auth-service` |
+| Repository ID | `018` |
+| Project | BuildOS |
+| Service | Authentication Service |
+| Document Type | Implementation Checkpoint |
+| Status | Active Development |
+| Created | 2026-08-20 |
+| Last Updated | 2026-08-20 |
+
+---
+
+# 2. Current Development Status
+
+## Repository Foundation
+
+Status: **COMPLETED**
+
+The repository has been created and initialized successfully.
+
+Repository:
+
+`https://github.com/BuildOSlab/018-buildos-auth-service`
+
+Local path:
+
+`/Users/gerald/my_apps/buildos-files/018-buildos-auth-service`
+
+Git branch:
+
+`main`
+
+Remote:
+
+`origin`
+
+Working tree:
+
+`clean`
+
+Initial repository structure has been created and pushed to GitHub.
+
+---
+
+# 3. Authoritative Repository Assignment
+
+According to:
+
+`RREG-001 — BuildOS Repository Registry`
+
+Repository `018` is:
+
+`018 — buildos-auth-service`
+
+Primary responsibility:
+
+> Owns authentication flows, credentials, login, logout, authentication tokens, and authentication lifecycle operations.
+
+Repository `018` must remain within this architectural boundary.
+
+---
+
+# 4. Technology Decision
+
+The authentication service will use:
+
+| Component | Decision |
+|---|---|
+| Language | Python |
+| Web Framework | FastAPI |
+| ORM | SQLAlchemy 2.x |
+| Database | PostgreSQL |
+| Migration System | Alembic |
+| Validation | Pydantic v2 |
+| Configuration | pydantic-settings |
+| Password Hashing | Argon2id |
+| Token Technology | JWT |
+| Testing | pytest |
+| Local Infrastructure | Docker / Docker Compose |
+| Rate Limiting | Redis-based architecture |
+| API Style | REST |
+| Architecture | Independently deployable service |
+
+FastAPI has been selected instead of Django because BuildOS is being developed as a large polyrepo/service-oriented architecture and the authentication service should remain a focused API service rather than a full Django application.
+
+---
+
+# 5. Database Architecture Decision
+
+Repository `018` will have its own authentication database boundary.
+
+The authentication service must NOT directly own the primary user database.
+
+The authentication database will contain authentication-specific data only.
+
+Initial planned tables:
+
+1. `auth_credentials`
+2. `refresh_tokens`
+3. `password_resets`
+4. `login_attempts`
+5. `auth_events`
+6. `security_events`
+
+---
+
+# 6. Database Ownership Boundaries
+
+## 018 — Authentication Service
+
+Owns:
+
+```text
+auth_credentials
+refresh_tokens
+password_resets
+login_attempts
+auth_events
+security_events
+````
+
+Does NOT own:
+
+```text
+users
+roles
+permissions
+sessions
+```
+
+---
+
+# 7. Related BuildOS Repositories
+
+## 019 — User Service
+
+`019-buildos-user-service`
+
+Responsible for:
+
+* User accounts
+* User identity
+* User account state
+* Foundational user profile ownership
+
+Authentication service will reference users through service/API contracts rather than directly owning the user database.
+
+---
+
+## 020 — Role Service
+
+`020-buildos-role-service`
+
+Responsible for:
+
+* Application roles
+* Role assignments
+* Role management
+
+---
+
+## 021 — Permission Service
+
+`021-buildos-permission-service`
+
+Responsible for:
+
+* Fine-grained permissions
+* Authorization policies
+* Permission evaluation
+
+---
+
+## 022 — Session Service
+
+`022-buildos-session-service`
+
+Responsible for:
+
+* Authenticated sessions
+* Session lifecycle
+* Session revocation
+* Session expiry
+* Session security controls
+
+---
+
+# 8. Authentication Boundary
+
+The intended high-level relationship is:
+
+```text
+                    BuildOS Clients
+                          |
+                          v
+                013 API Gateway
+                          |
+                          v
+                018 Auth Service
+                    /    |    \
+                   /     |     \
+                  v      v      v
+               019     020     021
+              User     Role   Permission
+             Service  Service   Service
+                          |
+                          v
+                     022 Session
+                       Service
+```
+
+Repository `018` is responsible for authentication.
+
+Authorization remains separated into the Role and Permission services.
+
+Session lifecycle remains separated into the Session Service.
+
+---
+
+# 9. Planned Authentication Capabilities
+
+The service will eventually support:
+
+## Authentication
+
+* Login
+* Logout
+* Credential validation
+* Authentication state
+* Authentication token issuance
+* Refresh token lifecycle
+* Token validation
+* Token revocation
+
+## Password Management
+
+* Password hashing
+* Password verification
+* Password update
+* Password reset
+* Password reset token lifecycle
+* Password security policies
+
+## Security
+
+* Login attempt tracking
+* Brute-force protection
+* Rate limiting
+* Suspicious authentication detection
+* Authentication events
+* Security events
+* Token revocation
+* Security auditing
+
+---
+
+# 10. Security Requirements
+
+Passwords must NEVER be stored in plaintext.
+
+Passwords will be stored using:
+
+`Argon2id`
+
+Authentication secrets must never be committed to Git.
+
+Environment-specific secrets belong in:
+
+`.env`
+
+The repository may contain only safe example configuration in:
+
+`.env.example`
+
+Production secrets must be managed through the approved BuildOS secrets-management architecture.
+
+---
+
+# 11. Current Repository Structure
+
+Current foundation:
+
+```text
+018-buildos-auth-service/
+│
+├── app/
+│   ├── main.py
+│   │
+│   ├── api/
+│   │   ├── __init__.py
+│   │   ├── dependencies.py
+│   │   └── v1/
+│   │       ├── __init__.py
+│   │       ├── router.py
+│   │       ├── auth.py
+│   │       ├── password.py
+│   │       ├── token.py
+│   │       └── security.py
+│   │
+│   ├── core/
+│   ├── database/
+│   ├── models/
+│   ├── schemas/
+│   ├── services/
+│   ├── repositories/
+│   ├── security/
+│   └── integrations/
+│
+├── migrations/
+│   └── versions/
+│
+├── tests/
+│   ├── unit/
+│   ├── integration/
+│   ├── security/
+│   └── api/
+│
+├── scripts/
+│
+├── docs/
+│   ├── architecture/
+│   ├── api/
+│   ├── security/
+│   └── database/
+│
+├── .env.example
+├── .gitignore
+├── alembic.ini
+├── Dockerfile
+├── docker-compose.yml
+├── pyproject.toml
+├── README.md
+└── LICENSE
+```
+
+---
+
+# 12. Completed Work
+
+The following has been completed:
+
+* [x] Repository created
+* [x] Repository named `018-buildos-auth-service`
+* [x] Repository pushed to GitHub
+* [x] `main` branch established
+* [x] Initial project structure created
+* [x] Core application directories created
+* [x] Database directories created
+* [x] Authentication model placeholders created
+* [x] Repository layer placeholders created
+* [x] Service layer placeholders created
+* [x] Security layer placeholders created
+* [x] Integration layer placeholders created
+* [x] Migration structure created
+* [x] Testing structure created
+* [x] Documentation structure created
+
+---
+
+# 13. Not Yet Implemented
+
+The following have NOT yet been implemented:
+
+* [ ] PostgreSQL database
+* [ ] SQLAlchemy configuration
+* [ ] Database connection
+* [ ] Database session management
+* [ ] Alembic configuration
+* [ ] Initial database migration
+* [ ] Authentication database models
+* [ ] Password hashing implementation
+* [ ] Login implementation
+* [ ] Logout implementation
+* [ ] Access-token implementation
+* [ ] Refresh-token implementation
+* [ ] Password update
+* [ ] Password reset
+* [ ] Rate limiting
+* [ ] Security event processing
+* [ ] User Service integration
+* [ ] Session Service integration
+* [ ] Role Service integration
+* [ ] Permission Service integration
+* [ ] Authentication API tests
+* [ ] Security tests
+* [ ] Integration tests
+
+---
+
+# 14. Immediate Next Task
+
+## TASK 02 — Database Foundation
+
+The next implementation session must begin with:
+
+```text
+PostgreSQL
+    ↓
+SQLAlchemy 2.x
+    ↓
+Database configuration
+    ↓
+Database session
+    ↓
+Alembic
+    ↓
+Initial migration
+```
+
+The first objective is to establish a working local authentication database.
+
+No login implementation should begin before this foundation is established.
+
+---
+
+# 15. Database Implementation Sequence
+
+After the database foundation:
+
+```text
+TASK 02
+Database foundation
+        ↓
+TASK 03
+Authentication database models
+        ↓
+TASK 04
+Initial Alembic migration
+        ↓
+TASK 05
+Password hashing
+        ↓
+TASK 06
+Credential repository
+        ↓
+TASK 07
+Authentication service
+        ↓
+TASK 08
+Login API
+        ↓
+TASK 09
+Access tokens
+        ↓
+TASK 10
+Refresh tokens
+        ↓
+TASK 11
+Logout / revocation
+        ↓
+TASK 12
+Password change
+        ↓
+TASK 13
+Password reset
+        ↓
+TASK 14
+Rate limiting
+        ↓
+TASK 15
+Security events
+        ↓
+TASK 16
+User Service integration
+        ↓
+TASK 17
+Session Service integration
+        ↓
+TASK 18
+Role / Permission integration
+        ↓
+TASK 19
+Security testing
+        ↓
+TASK 20
+Production hardening
+```
+
+---
+
+# 16. Important Architectural Rules
+
+1. `018` owns authentication, not general user management.
+
+2. `018` must not create a duplicate `users` table.
+
+3. Password hashes belong exclusively to the authentication service.
+
+4. Authentication credentials must never be exposed through ordinary user APIs.
+
+5. Authentication and authorization are separate concerns.
+
+6. Role management belongs to `020`.
+
+7. Permission management belongs to `021`.
+
+8. Session lifecycle belongs to `022`.
+
+9. Cross-service communication must use approved BuildOS contracts.
+
+10. Database ownership must not be bypassed through direct cross-service database access.
+
+11. Secrets must never be committed to Git.
+
+12. Database schema changes must be performed through Alembic migrations.
+
+13. Every security-sensitive operation must be designed for auditability.
+
+14. Authentication endpoints must be protected against brute-force and abuse.
+
+15. Repository boundaries defined by `RREG-001` must not be silently changed.
+
+---
+
+# 17. Git Checkpoint
+
+Current Git state:
+
+```text
+Branch:
+main
+
+Remote:
+origin
+
+Remote repository:
+https://github.com/BuildOSlab/018-buildos-auth-service.git
+
+Status:
+Clean
+
+Initial repository:
+Pushed successfully
+```
+
+Before ending each implementation session:
+
+```bash
+git status
+git add .
+git commit -m "<appropriate message>"
+git push
+```
+
+---
+
+# 18. Resume Instructions
+
+When development resumes, begin by reading this document.
+
+Then verify:
+
+```bash
+git status
+git branch --show-current
+git remote -v
+```
+
+Expected:
+
+```text
+main
+origin → BuildOSlab/018-buildos-auth-service
+working tree clean
+```
+
+Then continue with:
+
+**TASK 02 — Database Foundation**
+
+Do not skip directly to login implementation.
+
+---
+
+# 19. Architectural Status
+
+**Repository:** `018-buildos-auth-service`
+
+**Status:** Foundation initialized
+
+**Database:** Not yet implemented
+
+**Authentication:** Not yet implemented
+
+**Architecture:** Locked baseline
+
+**Next milestone:** Database Foundation
+
+---
+
+# End of Implementation Checkpoint
+
+
+============================================================
+FILE: migrations/env.py
+============================================================
+
+
+============================================================
+FILE: tests/__init__.py
+============================================================
+
+
+============================================================
+FILE: tests/api/__init__.py
+============================================================
+
+
+============================================================
+FILE: tests/api/test_auth_login.py
+============================================================
+"""
+BuildOS Auth Service
+Authentication API Integration Tests
+"""
+
+from unittest.mock import Mock
+from uuid import uuid4
+
+from fastapi.testclient import TestClient
+
+from app.api.dependencies import get_login_service
+from app.core.exceptions import IntegrationError, InvalidCredentialsError
+from app.main import app
+from app.services.authentication_service import AuthenticationResult
+from app.services.login_service import LoginResult
+
+
+def build_authenticated_result() -> LoginResult:
+    """Build a successful authentication result for API integration tests."""
+    return LoginResult(
+        authentication=AuthenticationResult(
+            authenticated=True,
+            user_id=uuid4(),
+            credential=None,
+            failure_reason=None,
+        )
+    )
+
+
+def test_login_success() -> None:
+    login_service = Mock()
+    result = build_authenticated_result()
+    login_service.login.return_value = result
+
+    app.dependency_overrides[get_login_service] = lambda: login_service
+
+    try:
+        client = TestClient(app)
+
+        response = client.post(
+            "/api/v1/auth/login",
+            json={
+                "identifier": "user@example.com",
+                "password": "correct-password",
+            },
+        )
+
+        assert response.status_code == 200
+
+        body = response.json()
+
+        assert body["authenticated"] is True
+        assert body["user_id"] == str(result.authentication.user_id)
+        assert body["access_token"] is None
+        assert body["refresh_token"] is None
+        assert body["token_type"] == "bearer"
+
+        login_service.login.assert_called_once_with(
+            identifier="user@example.com",
+            password="correct-password",
+            ip_address="testclient",
+            user_agent="testclient",
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_login_invalid_credentials_returns_401() -> None:
+    login_service = Mock()
+    login_service.login.side_effect = InvalidCredentialsError(
+        "Invalid credentials."
+    )
+
+    app.dependency_overrides[get_login_service] = lambda: login_service
+
+    try:
+        client = TestClient(app)
+
+        response = client.post(
+            "/api/v1/auth/login",
+            json={
+                "identifier": "user@example.com",
+                "password": "wrong-password",
+            },
+        )
+
+        assert response.status_code == 401
+        assert response.json() == {
+            "detail": "Invalid credentials.",
+        }
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_login_user_service_unavailable_returns_503() -> None:
+    login_service = Mock()
+    login_service.login.side_effect = IntegrationError(
+        "User Service integration transport is not configured."
+    )
+
+    app.dependency_overrides[get_login_service] = lambda: login_service
+
+    try:
+        client = TestClient(app)
+
+        response = client.post(
+            "/api/v1/auth/login",
+            json={
+                "identifier": "user@example.com",
+                "password": "correct-password",
+            },
+        )
+
+        assert response.status_code == 503
+        assert response.json() == {
+            "detail": "User identity service is unavailable.",
+        }
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_login_rejects_missing_identifier() -> None:
+    login_service = Mock()
+
+    app.dependency_overrides[get_login_service] = lambda: login_service
+
+    try:
+        client = TestClient(app)
+
+        response = client.post(
+            "/api/v1/auth/login",
+            json={
+                "password": "correct-password",
+            },
+        )
+
+        assert response.status_code == 422
+        login_service.login.assert_not_called()
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_login_rejects_missing_password() -> None:
+    login_service = Mock()
+
+    app.dependency_overrides[get_login_service] = lambda: login_service
+
+    try:
+        client = TestClient(app)
+
+        response = client.post(
+            "/api/v1/auth/login",
+            json={
+                "identifier": "user@example.com",
+            },
+        )
+
+        assert response.status_code == 422
+        login_service.login.assert_not_called()
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_login_rejects_empty_identifier() -> None:
+    login_service = Mock()
+
+    app.dependency_overrides[get_login_service] = lambda: login_service
+
+    try:
+        client = TestClient(app)
+
+        response = client.post(
+            "/api/v1/auth/login",
+            json={
+                "identifier": "",
+                "password": "correct-password",
+            },
+        )
+
+        assert response.status_code == 422
+        login_service.login.assert_not_called()
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_login_rejects_empty_password() -> None:
+    login_service = Mock()
+
+    app.dependency_overrides[get_login_service] = lambda: login_service
+
+    try:
+        client = TestClient(app)
+
+        response = client.post(
+            "/api/v1/auth/login",
+            json={
+                "identifier": "user@example.com",
+                "password": "",
+            },
+        )
+
+        assert response.status_code == 422
+        login_service.login.assert_not_called()
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_login_rejects_unknown_fields() -> None:
+    login_service = Mock()
+
+    app.dependency_overrides[get_login_service] = lambda: login_service
+
+    try:
+        client = TestClient(app)
+
+        response = client.post(
+            "/api/v1/auth/login",
+            json={
+                "identifier": "user@example.com",
+                "password": "correct-password",
+                "unexpected": "value",
+            },
+        )
+
+        assert response.status_code == 422
+        login_service.login.assert_not_called()
+    finally:
+        app.dependency_overrides.clear()
+
+
+============================================================
+FILE: tests/repositories/__init__.py
+============================================================
+
+
+============================================================
+FILE: tests/repositories/test_token_repository.py
+============================================================
+"""
+Tests for the refresh-token repository.
+"""
+
+# pylint: disable=redefined-outer-name
+from collections.abc import Generator
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from uuid import UUID, uuid4
+
+import pytest
+from sqlalchemy import create_engine, delete
+from sqlalchemy.engine import Engine
+from sqlalchemy.orm import Session
+
+from app.core.config import get_settings
+from app.models.refresh_token import RefreshToken
+from app.repositories.token_repository import TokenRepository
+
+
+@pytest.fixture(scope="module")
+def engine() -> Generator[Engine, None, None]:
+    """Create a PostgreSQL engine for repository tests."""
+    settings = get_settings()
+
+    engine = create_engine(
+        settings.database_url,
+        pool_pre_ping=True,
+    )
+
+    yield engine
+
+    engine.dispose()
+
+
+@pytest.fixture
+def db(engine: Engine) -> Generator[Session, None, None]:
+    """Provide a clean database session for each repository test."""
+    with Session(engine) as session:
+        yield session
+        session.rollback()
+
+
+@pytest.fixture
+def repository(db: Session) -> TokenRepository:
+    """Provide a TokenRepository."""
+    return TokenRepository(db)
+
+
+@pytest.fixture
+def user_id() -> UUID:
+    """Return a test user ID."""
+    return uuid4()
+
+
+@pytest.fixture
+def now() -> datetime:
+    """Return a timezone-aware test timestamp."""
+    return datetime.now(UTC)
+
+
+@pytest.fixture
+def cleanup_tokens(engine: Engine) -> Generator[list[UUID], None, None]:
+    """
+    Remove refresh tokens created during the test.
+
+    The repository tests operate against the real PostgreSQL schema,
+    so test-created rows must be cleaned up explicitly.
+    """
+    created_ids: list[UUID] = []
+
+    yield created_ids
+
+    with Session(engine) as session:
+        if created_ids:
+            session.execute(
+                delete(RefreshToken).where(
+                    RefreshToken.id.in_(created_ids),
+                ),
+            )
+            session.commit()
+
+
+@dataclass
+class TokenOptions:
+    """Optional configuration for creating a refresh token in tests."""
+
+    user_id: UUID | None = None
+    token_hash: str | None = None
+    expires_at: datetime | None = None
+    context_type: str = "PERSONAL"
+    organization_id: UUID | None = None
+    membership_id: UUID | None = None
+
+
+def create_token(
+    repository: TokenRepository,
+    cleanup_tokens: list[UUID],
+    options: TokenOptions | None = None,
+) -> RefreshToken:
+    """Create and register a refresh token for a test."""
+    options = options or TokenOptions()
+
+    token = repository.create(
+        user_id=options.user_id or uuid4(),
+        token_hash=options.token_hash or f"hash-{uuid4()}",
+        expires_at=(
+            options.expires_at
+            or datetime.now(UTC) + timedelta(days=30)
+        ),
+        context_type=options.context_type,
+        organization_id=options.organization_id,
+        membership_id=options.membership_id,
+    )
+
+    cleanup_tokens.append(token.id)
+    return token
+
+
+def test_create_token(
+    repository: TokenRepository,
+    cleanup_tokens: list[UUID],
+    user_id: UUID,
+    now: datetime,
+) -> None:
+    """Test creating a refresh token."""
+    token = create_token(
+        repository,
+        cleanup_tokens,
+        TokenOptions(
+            user_id=user_id,
+            expires_at=now + timedelta(days=30),
+        ),
+    )
+
+    assert token.id is not None
+    assert token.user_id == user_id
+    assert token.context_type == "PERSONAL"
+    assert token.is_revoked is False
+    assert token.revoked_at is None
+    assert token.last_used_at is None
+
+
+def test_get_by_token_hash(
+    repository: TokenRepository,
+    cleanup_tokens: list[UUID],
+    user_id: UUID,
+) -> None:
+    """Test retrieving a refresh token by hash."""
+    token_hash = f"hash-{uuid4()}"
+
+    token = create_token(
+        repository,
+        cleanup_tokens,
+        TokenOptions(
+            user_id=user_id,
+            token_hash=token_hash,
+        ),
+    )
+
+    result = repository.get_by_token_hash(token_hash)
+
+    assert result is not None
+    assert result.id == token.id
+    assert result.user_id == user_id
+
+
+def test_get_by_token_hash_returns_none_for_unknown_hash(
+    repository: TokenRepository,
+) -> None:
+    """Test unknown token hashes return None."""
+    result = repository.get_by_token_hash(
+        f"unknown-{uuid4()}",
+    )
+
+    assert result is None
+
+
+def test_get_active_by_token_hash_returns_active_token(
+    repository: TokenRepository,
+    cleanup_tokens: list[UUID],
+    now: datetime,
+) -> None:
+    """Test retrieving an active refresh token."""
+    token_hash = f"hash-{uuid4()}"
+
+    token = create_token(
+        repository,
+        cleanup_tokens,
+        TokenOptions(
+            token_hash=token_hash,
+            expires_at=now + timedelta(days=30),
+        ),
+    )
+
+    result = repository.get_active_by_token_hash(
+        token_hash=token_hash,
+        now=now,
+    )
+
+    assert result is not None
+    assert result.id == token.id
+
+
+def test_get_active_by_token_hash_rejects_revoked_token(
+    repository: TokenRepository,
+    cleanup_tokens: list[UUID],
+    now: datetime,
+) -> None:
+    """Test revoked tokens are not returned as active."""
+    token_hash = f"hash-{uuid4()}"
+
+    token = create_token(
+        repository,
+        cleanup_tokens,
+        TokenOptions(
+            token_hash=token_hash,
+            expires_at=now + timedelta(days=30),
+        ),
+    )
+
+    repository.revoke(
+        token,
+        revoked_at=now,
+    )
+
+    result = repository.get_active_by_token_hash(
+        token_hash=token_hash,
+        now=now,
+    )
+
+    assert result is None
+
+
+def test_get_active_by_token_hash_rejects_expired_token(
+    repository: TokenRepository,
+    cleanup_tokens: list[UUID],
+    now: datetime,
+) -> None:
+    """Test expired tokens are not returned as active."""
+    token_hash = f"hash-{uuid4()}"
+
+    create_token(
+        repository,
+        cleanup_tokens,
+        TokenOptions(
+            token_hash=token_hash,
+            expires_at=now - timedelta(seconds=1),
+        ),
+    )
+
+    result = repository.get_active_by_token_hash(
+        token_hash=token_hash,
+        now=now,
+    )
+
+    assert result is None
+
+
+def test_get_active_by_user(
+    repository: TokenRepository,
+    cleanup_tokens: list[UUID],
+    user_id: UUID,
+) -> None:
+    """Test retrieving all active tokens belonging to a user."""
+    first = create_token(
+        repository,
+        cleanup_tokens,
+        TokenOptions(user_id=user_id),
+    )
+
+    second = create_token(
+        repository,
+        cleanup_tokens,
+        TokenOptions(user_id=user_id),
+    )
+
+    result = repository.get_active_by_user(
+        user_id=user_id,
+    )
+
+    result_ids = {token.id for token in result}
+
+    assert first.id in result_ids
+    assert second.id in result_ids
+
+
+def test_get_active_by_user_filters_context(
+    repository: TokenRepository,
+    cleanup_tokens: list[UUID],
+    user_id: UUID,
+) -> None:
+    """Test filtering active tokens by authentication context."""
+    organization_id = uuid4()
+    membership_id = uuid4()
+
+    personal = create_token(
+        repository,
+        cleanup_tokens,
+        TokenOptions(
+            user_id=user_id,
+            context_type="PERSONAL",
+        ),
+    )
+
+    organization = create_token(
+        repository,
+        cleanup_tokens,
+        TokenOptions(
+            user_id=user_id,
+            context_type="ORGANIZATION",
+            organization_id=organization_id,
+            membership_id=membership_id,
+        ),
+    )
+
+    result = repository.get_active_by_user(
+        user_id=user_id,
+        context_type="ORGANIZATION",
+    )
+
+    result_ids = {token.id for token in result}
+
+    assert organization.id in result_ids
+    assert personal.id not in result_ids
+
+
+def test_get_active_by_user_filters_organization(
+    repository: TokenRepository,
+    cleanup_tokens: list[UUID],
+    user_id: UUID,
+) -> None:
+    """Test filtering active tokens by organization."""
+    organization_a = uuid4()
+    organization_b = uuid4()
+
+    token_a = create_token(
+        repository,
+        cleanup_tokens,
+        TokenOptions(
+            user_id=user_id,
+            context_type="ORGANIZATION",
+            organization_id=organization_a,
+        ),
+    )
+
+    token_b = create_token(
+        repository,
+        cleanup_tokens,
+        TokenOptions(
+            user_id=user_id,
+            context_type="ORGANIZATION",
+            organization_id=organization_b,
+        ),
+    )
+
+    result = repository.get_active_by_user(
+        user_id=user_id,
+        context_type="ORGANIZATION",
+        organization_id=organization_a,
+    )
+
+    result_ids = {token.id for token in result}
+
+    assert token_a.id in result_ids
+    assert token_b.id not in result_ids
+
+
+def test_get_active_by_user_filters_membership(
+    repository: TokenRepository,
+    cleanup_tokens: list[UUID],
+    user_id: UUID,
+) -> None:
+    """Test filtering active tokens by membership."""
+    organization_id = uuid4()
+    membership_a = uuid4()
+    membership_b = uuid4()
+
+    token_a = create_token(
+        repository,
+        cleanup_tokens,
+        TokenOptions(
+            user_id=user_id,
+            context_type="ORGANIZATION",
+            organization_id=organization_id,
+            membership_id=membership_a,
+        ),
+    )
+
+    token_b = create_token(
+        repository,
+        cleanup_tokens,
+        TokenOptions(
+            user_id=user_id,
+            context_type="ORGANIZATION",
+            organization_id=organization_id,
+            membership_id=membership_b,
+        ),
+    )
+
+    result = repository.get_active_by_user(
+        user_id=user_id,
+        context_type="ORGANIZATION",
+        organization_id=organization_id,
+        membership_id=membership_a,
+    )
+
+    result_ids = {token.id for token in result}
+
+    assert token_a.id in result_ids
+    assert token_b.id not in result_ids
+
+
+def test_revoke(
+    repository: TokenRepository,
+    cleanup_tokens: list[UUID],
+    now: datetime,
+) -> None:
+    """Test revoking one refresh token."""
+    token = create_token(
+        repository,
+        cleanup_tokens,
+    )
+
+    result = repository.revoke(
+        token,
+        revoked_at=now,
+    )
+
+    assert result.is_revoked is True
+    assert result.revoked_at == now
+
+
+def test_revoke_all_for_user(
+    repository: TokenRepository,
+    cleanup_tokens: list[UUID],
+    user_id: UUID,
+    now: datetime,
+) -> None:
+    """Test revoking all active tokens for a user."""
+    first = create_token(
+        repository,
+        cleanup_tokens,
+        TokenOptions(user_id=user_id),
+    )
+
+    second = create_token(
+        repository,
+        cleanup_tokens,
+        TokenOptions(user_id=user_id),
+    )
+
+    revoked_count = repository.revoke_all_for_user(
+        user_id=user_id,
+        revoked_at=now,
+    )
+
+    assert revoked_count >= 2
+    assert first.is_revoked is True
+    assert second.is_revoked is True
+
+
+def test_revoke_all_for_user_scoped_to_context(
+    repository: TokenRepository,
+    cleanup_tokens: list[UUID],
+    user_id: UUID,
+    now: datetime,
+) -> None:
+    """Test scoped bulk revocation."""
+    organization_id = uuid4()
+
+    personal = create_token(
+        repository,
+        cleanup_tokens,
+        TokenOptions(
+            user_id=user_id,
+            context_type="PERSONAL",
+        ),
+    )
+
+    organization = create_token(
+        repository,
+        cleanup_tokens,
+        TokenOptions(
+            user_id=user_id,
+            context_type="ORGANIZATION",
+            organization_id=organization_id,
+        ),
+    )
+
+    revoked_count = repository.revoke_all_for_user(
+        user_id=user_id,
+        revoked_at=now,
+        context_type="ORGANIZATION",
+        organization_id=organization_id,
+    )
+
+    assert revoked_count == 1
+    assert personal.is_revoked is False
+    assert organization.is_revoked is True
+
+
+def test_mark_used(
+    repository: TokenRepository,
+    cleanup_tokens: list[UUID],
+    now: datetime,
+) -> None:
+    """Test recording token usage."""
+    token = create_token(
+        repository,
+        cleanup_tokens,
+    )
+
+    result = repository.mark_used(
+        token,
+        used_at=now,
+    )
+
+    assert result.last_used_at == now
+
+
+def test_rotate(
+    repository: TokenRepository,
+    cleanup_tokens: list[UUID],
+    now: datetime,
+) -> None:
+    """Test refresh-token rotation."""
+    original = create_token(
+        repository,
+        cleanup_tokens,
+    )
+
+    replacement = create_token(
+        repository,
+        cleanup_tokens,
+    )
+
+    result = repository.rotate(
+        original,
+        replacement_token_id=replacement.id,
+        revoked_at=now,
+    )
+
+    assert result.is_revoked is True
+    assert result.revoked_at == now
+    assert result.replaced_by_token_id == replacement.id
+
+
+============================================================
+FILE: tests/security/test_token_signing.py
+============================================================
+"""
+Tests for JWT token signing and validation.
+"""
+
+from collections.abc import Generator
+from datetime import UTC, datetime, timedelta
+from uuid import UUID
+
+import jwt
+import pytest
+
+from app.core.config import get_settings
+from app.core.constants import TOKEN_TYPE_ACCESS, TOKEN_TYPE_REFRESH
+from app.core.exceptions import ExpiredTokenError, InvalidTokenError
+from app.security.token_signing import create_access_token, create_refresh_token
+from app.security.token_validation import validate_access_token, validate_refresh_token
+
+
+@pytest.fixture(autouse=True)
+def test_settings(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
+    """Configure test JWT settings and clear the settings cache."""
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql://user:pass@localhost/db",
+    )
+    monkeypatch.setenv(
+        "JWT_SECRET_KEY",
+        "test-secret-key-for-buildos-auth-service-32bytes",
+    )
+
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
+def test_create_refresh_token_basic() -> None:
+    """Test that a refresh token can be created and decoded."""
+    user_id = UUID("12345678-1234-1234-1234-123456789012")
+    token = create_refresh_token(user_id=user_id)
+
+    assert token
+
+    payload = jwt.decode(
+        token,
+        options={"verify_signature": False},
+    )
+
+    assert payload["sub"] == str(user_id)
+    assert payload["token_type"] == TOKEN_TYPE_REFRESH
+
+
+def test_create_refresh_token_contains_correct_user_id() -> None:
+    """Test that a refresh token contains the correct user ID."""
+    user_id = UUID("12345678-1234-1234-1234-123456789012")
+    token = create_refresh_token(user_id=user_id)
+
+    validated = validate_refresh_token(token)
+
+    assert validated["sub"] == str(user_id)
+
+
+def test_create_refresh_token_token_type() -> None:
+    """Test that a refresh token contains the correct token type."""
+    token = create_refresh_token(
+        user_id=UUID("12345678-1234-1234-1234-123456789012"),
+    )
+
+    validated = validate_refresh_token(token)
+
+    assert validated["token_type"] == TOKEN_TYPE_REFRESH
+
+
+def test_create_refresh_token_issuer_audience() -> None:
+    """Test that a refresh token contains the configured issuer and audience."""
+    settings = get_settings()
+
+    token = create_refresh_token(
+        user_id=UUID("12345678-1234-1234-1234-123456789012"),
+    )
+
+    validated = validate_refresh_token(token)
+
+    assert validated["iss"] == settings.jwt_issuer
+    assert validated["aud"] == settings.jwt_audience
+
+
+def test_create_refresh_token_context_type_defaults_to_personal() -> None:
+    """Test that refresh tokens default to personal context."""
+    token = create_refresh_token(
+        user_id=UUID("12345678-1234-1234-1234-123456789012"),
+    )
+
+    validated = validate_refresh_token(token)
+
+    assert validated.get("context_type") == "PERSONAL"
+
+
+def test_create_refresh_token_jti_exists() -> None:
+    """Test that a refresh token contains a JTI claim."""
+    token = create_refresh_token(
+        user_id=UUID("12345678-1234-1234-1234-123456789012"),
+    )
+
+    validated = validate_refresh_token(token)
+
+    assert "jti" in validated
+    assert isinstance(validated["jti"], str)
+
+
+def test_validate_refresh_token_valid() -> None:
+    """Test that a valid refresh token is successfully validated."""
+    user_id = UUID("12345678-1234-1234-1234-123456789012")
+    token = create_refresh_token(user_id=user_id)
+
+    payload = validate_refresh_token(token)
+
+    assert payload["sub"] == str(user_id)
+    assert payload["token_type"] == TOKEN_TYPE_REFRESH
+
+
+def test_validate_access_token_rejects_refresh_token() -> None:
+    """Test that access-token validation rejects refresh tokens."""
+    refresh_token = create_refresh_token(
+        user_id=UUID("12345678-1234-1234-1234-123456789012"),
+    )
+
+    with pytest.raises(InvalidTokenError, match="Invalid token type."):
+        validate_access_token(refresh_token)
+
+
+def test_validate_refresh_token_rejects_access_token() -> None:
+    """Test that refresh-token validation rejects access tokens."""
+    access_token = create_access_token(
+        user_id=UUID("12345678-1234-1234-1234-123456789012"),
+    )
+
+    with pytest.raises(InvalidTokenError, match="Invalid token type."):
+        validate_refresh_token(access_token)
+
+
+def test_validate_refresh_token_malformed() -> None:
+    """Test that malformed tokens are rejected."""
+    with pytest.raises(InvalidTokenError):
+        validate_refresh_token("not.a.jwt.token")
+
+
+def test_validate_refresh_token_invalid_token_type() -> None:
+    """Test that refresh-token validation rejects an invalid token type."""
+    settings = get_settings()
+
+    payload = {
+        "sub": str(UUID("12345678-1234-1234-1234-123456789012")),
+        "iss": settings.jwt_issuer,
+        "aud": settings.jwt_audience,
+        "iat": datetime.now(UTC),
+        "exp": datetime.now(UTC) + timedelta(minutes=15),
+        "jti": "test-jti",
+        "token_type": "invalid",
+        "context_type": "PERSONAL",
+    }
+
+    token = jwt.encode(
+        payload,
+        settings.jwt_secret_key,
+        algorithm=settings.jwt_algorithm,
+    )
+
+    with pytest.raises(InvalidTokenError, match="Invalid token type."):
+        validate_refresh_token(token)
+
+
+def test_create_refresh_token_organization_context() -> None:
+    """Test that refresh tokens support organization context."""
+    user_id = UUID("12345678-1234-1234-1234-123456789012")
+    org_id = UUID("87654321-4321-4321-4321-210987654321")
+    membership_id = UUID("11111111-1111-1111-1111-111111111111")
+
+    token = create_refresh_token(
+        user_id=user_id,
+        organization_id=org_id,
+        membership_id=membership_id,
+    )
+
+    validated = validate_refresh_token(token)
+
+    assert validated["organization_id"] == str(org_id)
+    assert validated["membership_id"] == str(membership_id)
+
+
+def test_validate_refresh_token_expired() -> None:
+    """Test that an expired refresh token is rejected."""
+    settings = get_settings()
+
+    past = datetime.now(UTC) - timedelta(
+        days=settings.refresh_token_expire_days + 1,
+    )
+
+    token = create_refresh_token(
+        user_id=UUID("12345678-1234-1234-1234-123456789012"),
+        now=past,
+    )
+
+    with pytest.raises(
+        ExpiredTokenError,
+        match="Refresh token has expired.",
+    ):
+        validate_refresh_token(token)
+
+
+def test_create_refresh_token_context_type_explicit() -> None:
+    """Test that an explicit organization context is preserved."""
+    token = create_refresh_token(
+        user_id=UUID("12345678-1234-1234-1234-123456789012"),
+        context_type="ORGANIZATION",
+    )
+
+    validated = validate_refresh_token(token)
+
+    assert validated["context_type"] == "ORGANIZATION"
+
+
+def test_create_access_token_basic() -> None:
+    """Test that an access token can be created and decoded."""
+    user_id = UUID("12345678-1234-1234-1234-123456789012")
+
+    token = create_access_token(user_id=user_id)
+
+    assert token
+
+    payload = jwt.decode(
+        token,
+        options={"verify_signature": False},
+    )
+
+    assert payload["sub"] == str(user_id)
+    assert payload["token_type"] == TOKEN_TYPE_ACCESS
+
+
+def test_validate_access_token_valid() -> None:
+    """Test that a valid access token can be validated."""
+    user_id = UUID("12345678-1234-1234-1234-123456789012")
+
+    token = create_access_token(user_id=user_id)
+
+    payload = validate_access_token(token)
+
+    assert payload["sub"] == str(user_id)
+    assert payload["token_type"] == TOKEN_TYPE_ACCESS
+
+
+def test_create_access_token_issuer_audience() -> None:
+    """Test that access tokens contain the configured issuer and audience."""
+    settings = get_settings()
+
+    token = create_access_token(
+        user_id=UUID("12345678-1234-1234-1234-123456789012"),
+    )
+
+    payload = validate_access_token(token)
+
+    assert payload["iss"] == settings.jwt_issuer
+    assert payload["aud"] == settings.jwt_audience
+
+
+def test_create_access_token_context_type_defaults_to_personal() -> None:
+    """Test that access tokens default to personal context."""
+    token = create_access_token(
+        user_id=UUID("12345678-1234-1234-1234-123456789012"),
+    )
+
+    payload = validate_access_token(token)
+
+    assert payload.get("context_type") == "PERSONAL"
+
+
+def test_create_access_token_jti_exists() -> None:
+    """Test that access tokens contain a JWT ID."""
+    token = create_access_token(
+        user_id=UUID("12345678-1234-1234-1234-123456789012"),
+    )
+
+    payload = validate_access_token(token)
+
+    assert "jti" in payload
+    assert isinstance(payload["jti"], str)
+
+
+def test_create_access_token_organization_context() -> None:
+    """Test access-token organization context claims."""
+    user_id = UUID("12345678-1234-1234-1234-123456789012")
+    organization_id = UUID("87654321-4321-4321-4321-210987654321")
+    membership_id = UUID("11111111-1111-1111-1111-111111111111")
+
+    token = create_access_token(
+        user_id=user_id,
+        organization_id=organization_id,
+        membership_id=membership_id,
+        context_type="ORGANIZATION",
+    )
+
+    payload = validate_access_token(token)
+
+    assert payload["context_type"] == "ORGANIZATION"
+    assert payload["organization_id"] == str(organization_id)
+    assert payload["membership_id"] == str(membership_id)
+
+
+def test_validate_access_token_malformed() -> None:
+    """Test that malformed access tokens are rejected."""
+    with pytest.raises(InvalidTokenError):
+        validate_access_token("not.a.jwt.token")
+
+
+def test_validate_access_token_expired() -> None:
+    """Test that expired access tokens are rejected."""
+    settings = get_settings()
+
+    past = datetime.now(UTC) - timedelta(
+        minutes=settings.access_token_expire_minutes + 1,
+    )
+
+    token = create_access_token(
+        user_id=UUID("12345678-1234-1234-1234-123456789012"),
+        now=past,
+    )
+
+    with pytest.raises(
+        ExpiredTokenError,
+        match="Access token has expired.",
+    ):
+        validate_access_token(token)
+
+
+============================================================
+FILE: tests/services/__init__.py
+============================================================
+
+
+============================================================
+FILE: tests/services/test_authentication_service.py
+============================================================
+"""
+BuildOS Auth Service
+Authentication Service Behavioral Tests
+"""
+
+from datetime import UTC, datetime, timedelta
+from unittest.mock import Mock, patch
+from uuid import UUID, uuid4
+
+from app.models.auth_credential import AuthCredential
+from app.services.authentication_service import AuthenticationService
+
+
+def build_service(
+    credential: AuthCredential | None,
+) -> tuple[AuthenticationService, Mock, Mock, Mock]:
+    credential_repository = Mock()
+    login_attempt_repository = Mock()
+    event_repository = Mock()
+
+    credential_repository.get_by_user_id.return_value = credential
+
+    service = AuthenticationService(
+        credential_repository=credential_repository,
+        login_attempt_repository=login_attempt_repository,
+        event_repository=event_repository,
+    )
+
+    return (
+        service,
+        credential_repository,
+        login_attempt_repository,
+        event_repository,
+    )
+
+
+def build_credential(
+    *,
+    user_id: UUID | None = None,
+    password_hash: str = "correct-password-hash",
+    is_active: bool = True,
+    is_locked: bool = False,
+    failed_login_count: int = 0,
+    locked_until: datetime | None = None,
+) -> AuthCredential:
+    return AuthCredential(
+        user_id=user_id or uuid4(),
+        password_hash=password_hash,
+        is_active=is_active,
+        is_locked=is_locked,
+        failed_login_count=failed_login_count,
+        locked_until=locked_until,
+    )
+
+
+def test_successful_authentication() -> None:
+    user_id = uuid4()
+    now = datetime.now(UTC)
+
+    credential = build_credential(user_id=user_id)
+
+    (
+        service,
+        credential_repository,
+        login_attempt_repository,
+        event_repository,
+    ) = build_service(credential)
+
+    with patch(
+        "app.services.authentication_service.verify_password",
+        return_value=True,
+    ):
+        result = service.authenticate(
+            user_id=user_id,
+            password="correct-password",
+            identifier="user@example.com",
+            now=now,
+        )
+
+    assert result.authenticated is True
+    assert result.user_id == user_id
+    assert result.credential is credential
+    assert result.failure_reason is None
+
+    credential_repository.record_successful_login.assert_called_once_with(
+        credential,
+        login_at=now,
+    )
+
+    login_attempt_repository.create.assert_called_once()
+
+    attempt = login_attempt_repository.create.call_args.kwargs
+
+    assert attempt["identifier"] == "user@example.com"
+    assert attempt["user_id"] == user_id
+    assert attempt["successful"] is True
+
+    event_repository.create_auth_event.assert_called_once()
+
+    event = event_repository.create_auth_event.call_args.kwargs
+
+    assert event["event_type"] == "LOGIN_SUCCESS"
+
+
+def test_invalid_password_records_failed_attempt() -> None:
+    user_id = uuid4()
+    now = datetime.now(UTC)
+
+    credential = build_credential(user_id=user_id)
+
+    (
+        service,
+        credential_repository,
+        login_attempt_repository,
+        event_repository,
+    ) = build_service(credential)
+
+    def record_failed_login(
+        current_credential: AuthCredential,
+    ) -> AuthCredential:
+        current_credential.failed_login_count += 1
+        return current_credential
+
+    credential_repository.record_failed_login.side_effect = record_failed_login
+
+    with patch(
+        "app.services.authentication_service.verify_password",
+        return_value=False,
+    ):
+        result = service.authenticate(
+            user_id=user_id,
+            password="wrong-password",
+            identifier="user@example.com",
+            now=now,
+        )
+
+    assert result.authenticated is False
+    assert result.user_id == user_id
+    assert result.failure_reason == "INVALID_CREDENTIALS"
+    assert result.credential is credential
+    assert credential.failed_login_count == 1
+
+    credential_repository.record_failed_login.assert_called_once_with(
+        credential,
+    )
+
+    login_attempt_repository.create.assert_called_once()
+
+    attempt = login_attempt_repository.create.call_args.kwargs
+
+    assert attempt["successful"] is False
+    assert attempt["failure_reason"] == "INVALID_CREDENTIALS"
+
+    event_repository.create_auth_event.assert_called_once()
+
+    event = event_repository.create_auth_event.call_args.kwargs
+
+    assert event["event_type"] == "LOGIN_FAILURE"
+
+
+def test_fifth_failed_attempt_locks_account() -> None:
+    user_id = uuid4()
+    now = datetime.now(UTC)
+
+    credential = build_credential(
+        user_id=user_id,
+        failed_login_count=4,
+    )
+
+    (
+        service,
+        credential_repository,
+        _,
+        event_repository,
+    ) = build_service(credential)
+
+    def record_failed_login(
+        current_credential: AuthCredential,
+    ) -> AuthCredential:
+        current_credential.failed_login_count += 1
+        return current_credential
+
+    def lock_credential(
+        current_credential: AuthCredential,
+        *,
+        locked_until: datetime | None,
+    ) -> AuthCredential:
+        current_credential.is_locked = True
+        current_credential.locked_until = locked_until
+        return current_credential
+
+    credential_repository.record_failed_login.side_effect = record_failed_login
+    credential_repository.lock.side_effect = lock_credential
+
+    with patch(
+        "app.services.authentication_service.verify_password",
+        return_value=False,
+    ):
+        result = service.authenticate(
+            user_id=user_id,
+            password="wrong-password",
+            identifier="user@example.com",
+            now=now,
+        )
+
+    assert result.authenticated is False
+    assert result.failure_reason == "ACCOUNT_LOCKED"
+    assert result.credential is credential
+    assert credential.failed_login_count == 5
+    assert credential.is_locked is True
+
+    credential_repository.record_failed_login.assert_called_once_with(
+        credential,
+    )
+
+    credential_repository.lock.assert_called_once()
+
+    lock_kwargs = credential_repository.lock.call_args.kwargs
+
+    assert lock_kwargs["locked_until"] is not None
+    assert lock_kwargs["locked_until"] > now
+
+    event_repository.create_security_event.assert_called_once()
+
+    event = event_repository.create_security_event.call_args.kwargs
+
+    assert event["event_type"] == "ACCOUNT_LOCKED"
+    assert event["severity"] == "warning"
+
+def test_locked_account_cannot_authenticate() -> None:
+    user_id = uuid4()
+    now = datetime.now(UTC)
+
+    credential = build_credential(
+        user_id=user_id,
+        is_locked=True,
+        locked_until=now + timedelta(minutes=15),
+    )
+
+    (
+        service,
+        credential_repository,
+        login_attempt_repository,
+        event_repository,
+    ) = build_service(credential)
+
+    with patch(
+        "app.services.authentication_service.verify_password",
+        return_value=True,
+    ):
+        result = service.authenticate(
+            user_id=user_id,
+            password="correct-password",
+            identifier="user@example.com",
+            now=now,
+        )
+
+    assert result.authenticated is False
+    assert result.failure_reason == "ACCOUNT_LOCKED"
+    assert result.user_id == user_id
+    assert result.credential is credential
+
+    credential_repository.record_successful_login.assert_not_called()
+
+    login_attempt_repository.create.assert_called_once()
+
+    attempt = login_attempt_repository.create.call_args.kwargs
+
+    assert attempt["identifier"] == "user@example.com"
+    assert attempt["user_id"] == user_id
+    assert attempt["successful"] is False
+    assert attempt["failure_reason"] == "ACCOUNT_LOCKED"
+
+    event_repository.create_auth_event.assert_called_once()
+
+    event = event_repository.create_auth_event.call_args.kwargs
+
+    assert event["event_type"] == "LOGIN_FAILURE"
+
+def test_expired_lock_allows_authentication() -> None:
+    user_id = uuid4()
+    now = datetime.now(UTC)
+
+    credential = build_credential(
+        user_id=user_id,
+        is_locked=True,
+        locked_until=now - timedelta(minutes=1),
+    )
+
+    (
+        service,
+        credential_repository,
+        login_attempt_repository,
+        event_repository,
+    ) = build_service(credential)
+
+    with patch(
+        "app.services.authentication_service.verify_password",
+        return_value=True,
+    ):
+        result = service.authenticate(
+            user_id=user_id,
+            password="correct-password",
+            identifier="user@example.com",
+            now=now,
+        )
+
+    assert result.authenticated is True
+    assert result.failure_reason is None
+
+    credential_repository.record_successful_login.assert_called_once_with(
+        credential,
+        login_at=now,
+    )
+
+    login_attempt_repository.create.assert_called_once()
+
+    event_repository.create_auth_event.assert_called_once()
+
+
+def test_successful_login_resets_failed_login_state() -> None:
+    user_id = uuid4()
+    now = datetime.now(UTC)
+
+    credential = build_credential(
+        user_id=user_id,
+        failed_login_count=4,
+    )
+
+    service, credential_repository, _, _ = build_service(credential)
+
+    with patch(
+        "app.services.authentication_service.verify_password",
+        return_value=True,
+    ):
+        result = service.authenticate(
+            user_id=user_id,
+            password="correct-password",
+            identifier="user@example.com",
+            now=now,
+        )
+
+    assert result.authenticated is True
+
+    credential_repository.record_successful_login.assert_called_once_with(
+        credential,
+        login_at=now,
+    )
+
+
+def test_inactive_credential_cannot_authenticate() -> None:
+    user_id = uuid4()
+
+    credential = build_credential(
+        user_id=user_id,
+        is_active=False,
+    )
+
+    (
+        service,
+        credential_repository,
+        login_attempt_repository,
+        event_repository,
+    ) = build_service(credential)
+
+    with patch(
+        "app.services.authentication_service.verify_password",
+        return_value=True,
+    ):
+        result = service.authenticate(
+            user_id=user_id,
+            password="correct-password",
+            identifier="user@example.com",
+        )
+
+    assert result.authenticated is False
+    assert result.failure_reason == "CREDENTIAL_INACTIVE"
+
+    credential_repository.record_successful_login.assert_not_called()
+
+    login_attempt_repository.create.assert_called_once()
+
+    attempt = login_attempt_repository.create.call_args.kwargs
+
+    assert attempt["failure_reason"] == "CREDENTIAL_INACTIVE"
+
+    event_repository.create_auth_event.assert_called_once()
+
+
+def test_missing_credential_returns_invalid_credentials() -> None:
+    user_id = uuid4()
+
+    (
+        service,
+        credential_repository,
+        login_attempt_repository,
+        event_repository,
+    ) = build_service(None)
+
+    with patch(
+        "app.services.authentication_service.verify_password",
+        return_value=True,
+    ):
+        result = service.authenticate(
+            user_id=user_id,
+            password="correct-password",
+            identifier="user@example.com",
+        )
+
+    assert result.authenticated is False
+    assert result.user_id is None
+    assert result.credential is None
+    assert result.failure_reason == "INVALID_CREDENTIALS"
+
+    credential_repository.record_successful_login.assert_not_called()
+
+    login_attempt_repository.create.assert_called_once()
+
+    attempt = login_attempt_repository.create.call_args.kwargs
+
+    assert attempt["user_id"] is None
+    assert attempt["failure_reason"] == "INVALID_CREDENTIALS"
+
+    event_repository.create_auth_event.assert_called_once()
+
+
+def test_locked_account_does_not_verify_password() -> None:
+    user_id = uuid4()
+    now = datetime.now(UTC)
+
+    credential = build_credential(
+        user_id=user_id,
+        is_locked=True,
+        locked_until=now + timedelta(minutes=15),
+    )
+
+    (
+        service,
+        credential_repository,
+        login_attempt_repository,
+        event_repository,
+    ) = build_service(credential)
+
+    with patch(
+        "app.services.authentication_service.verify_password",
+    ) as verify_password:
+        result = service.authenticate(
+            user_id=user_id,
+            password="correct-password",
+            identifier="user@example.com",
+            now=now,
+        )
+
+    assert result.authenticated is False
+    assert result.failure_reason == "ACCOUNT_LOCKED"
+
+    verify_password.assert_not_called()
+    credential_repository.record_successful_login.assert_not_called()
+
+    login_attempt_repository.create.assert_called_once()
+    event_repository.create_auth_event.assert_called_once()
+
+
+def test_inactive_credential_does_not_verify_password() -> None:
+    user_id = uuid4()
+
+    credential = build_credential(
+        user_id=user_id,
+        is_active=False,
+    )
+
+    (
+        service,
+        credential_repository,
+        login_attempt_repository,
+        event_repository,
+    ) = build_service(credential)
+
+    with patch(
+        "app.services.authentication_service.verify_password",
+    ) as verify_password:
+        result = service.authenticate(
+            user_id=user_id,
+            password="correct-password",
+            identifier="user@example.com",
+        )
+
+    assert result.authenticated is False
+    assert result.failure_reason == "CREDENTIAL_INACTIVE"
+
+    verify_password.assert_not_called()
+    credential_repository.record_successful_login.assert_not_called()
+
+    login_attempt_repository.create.assert_called_once()
+    event_repository.create_auth_event.assert_called_once()
+
+
+def test_fifth_failed_attempt_uses_configured_lock_duration() -> None:
+    user_id = uuid4()
+    now = datetime.now(UTC)
+
+    credential = build_credential(
+        user_id=user_id,
+        failed_login_count=4,
+    )
+
+    (
+        service,
+        credential_repository,
+        _,
+        event_repository,
+    ) = build_service(credential)
+
+    def record_failed_login(
+        current_credential: AuthCredential,
+    ) -> AuthCredential:
+        current_credential.failed_login_count += 1
+        return current_credential
+
+    def lock_credential(
+        current_credential: AuthCredential,
+        *,
+        locked_until: datetime | None,
+    ) -> AuthCredential:
+        current_credential.is_locked = True
+        current_credential.locked_until = locked_until
+        return current_credential
+
+    credential_repository.record_failed_login.side_effect = record_failed_login
+    credential_repository.lock.side_effect = lock_credential
+
+    with patch(
+        "app.services.authentication_service.verify_password",
+        return_value=False,
+    ):
+        result = service.authenticate(
+            user_id=user_id,
+            password="wrong-password",
+            identifier="user@example.com",
+            now=now,
+        )
+
+    assert result.authenticated is False
+    assert result.failure_reason == "ACCOUNT_LOCKED"
+
+    lock_kwargs = credential_repository.lock.call_args.kwargs
+    locked_until = lock_kwargs["locked_until"]
+
+    assert locked_until is not None
+    assert locked_until > now
+
+    expected_duration = timedelta(
+        minutes=15,
+    )
+
+    assert locked_until == now + expected_duration
+
+    event_repository.create_security_event.assert_called_once()
+
+
+def test_successful_authentication_preserves_context() -> None:
+    user_id = uuid4()
+    organization_id = uuid4()
+    membership_id = uuid4()
+    now = datetime.now(UTC)
+
+    credential = build_credential(user_id=user_id)
+
+    (
+        service,
+        _,
+        login_attempt_repository,
+        event_repository,
+    ) = build_service(credential)
+
+    with patch(
+        "app.services.authentication_service.verify_password",
+        return_value=True,
+    ):
+        result = service.authenticate(
+            user_id=user_id,
+            password="correct-password",
+            identifier="user@example.com",
+            context_type="ORGANIZATION",
+            organization_id=organization_id,
+            membership_id=membership_id,
+            ip_address="127.0.0.1",
+            user_agent="BuildOS-Test",
+            now=now,
+        )
+
+    assert result.authenticated is True
+
+    attempt = login_attempt_repository.create.call_args.kwargs
+
+    assert attempt["context_type"] == "ORGANIZATION"
+    assert attempt["organization_id"] == organization_id
+    assert attempt["membership_id"] == membership_id
+    assert attempt["ip_address"] == "127.0.0.1"
+    assert attempt["user_agent"] == "BuildOS-Test"
+
+    event = event_repository.create_auth_event.call_args.kwargs
+
+    assert event["context_type"] == "ORGANIZATION"
+    assert event["organization_id"] == organization_id
+    assert event["membership_id"] == membership_id
+    assert event["ip_address"] == "127.0.0.1"
+    assert event["user_agent"] == "BuildOS-Test"
+
+
+def test_lock_records_failed_attempt_and_security_event() -> None:
+    user_id = uuid4()
+    now = datetime.now(UTC)
+
+    credential = build_credential(
+        user_id=user_id,
+        failed_login_count=4,
+    )
+
+    (
+        service,
+        credential_repository,
+        login_attempt_repository,
+        event_repository,
+    ) = build_service(credential)
+
+    def record_failed_login(
+        current_credential: AuthCredential,
+    ) -> AuthCredential:
+        current_credential.failed_login_count += 1
+        return current_credential
+
+    def lock_credential(
+        current_credential: AuthCredential,
+        *,
+        locked_until: datetime | None,
+    ) -> AuthCredential:
+        current_credential.is_locked = True
+        current_credential.locked_until = locked_until
+        return current_credential
+
+    credential_repository.record_failed_login.side_effect = record_failed_login
+    credential_repository.lock.side_effect = lock_credential
+
+    with patch(
+        "app.services.authentication_service.verify_password",
+        return_value=False,
+    ):
+        result = service.authenticate(
+            user_id=user_id,
+            password="wrong-password",
+            identifier="user@example.com",
+            now=now,
+        )
+
+    assert result.failure_reason == "ACCOUNT_LOCKED"
+
+    login_attempt_repository.create.assert_called_once()
+
+    attempt = login_attempt_repository.create.call_args.kwargs
+
+    assert attempt["identifier"] == "user@example.com"
+    assert attempt["user_id"] == user_id
+    assert attempt["successful"] is False
+    assert attempt["failure_reason"] == "INVALID_CREDENTIALS"
+
+    event_repository.create_security_event.assert_called_once()
+
+    event = event_repository.create_security_event.call_args.kwargs
+
+    assert event["user_id"] == user_id
+    assert event["event_type"] == "ACCOUNT_LOCKED"
+    assert event["severity"] == "warning"
+
+============================================================
+FILE: tests/services/test_password_service.py
+============================================================
+"""
+BuildOS Auth Service
+Password Service Tests
+"""
+
+from datetime import UTC, datetime
+from types import SimpleNamespace
+from typing import Any, cast
+from unittest.mock import ANY, Mock
+from uuid import UUID, uuid4
+
+import pytest
+
+from app.core.constants import (
+    EVENT_PASSWORD_CHANGED,
+    EVENT_PASSWORD_RESET_COMPLETED,
+    EVENT_PASSWORD_RESET_REQUESTED,
+)
+from app.core.exceptions import InvalidCredentialsError, PasswordResetError
+from app.integrations.user_service import UserService
+from app.repositories.credential_repository import CredentialRepository
+from app.repositories.event_repository import EventRepository
+from app.repositories.password_reset_repository import PasswordResetRepository
+from app.repositories.token_repository import TokenRepository
+from app.services.password_service import PasswordService
+
+
+def build_service(
+    *,
+    credential: Any = None,
+    resolved_user_id: UUID | None = None,
+    reset: Any = None,
+) -> tuple[
+    PasswordService,
+    Mock,
+    Mock,
+    Mock,
+    Mock,
+    Mock,
+]:
+    """Build a password service with typed repository mocks."""
+
+    user_service = Mock(spec=UserService)
+    credential_repository = Mock(spec=CredentialRepository)
+    password_reset_repository = Mock(spec=PasswordResetRepository)
+    token_repository = Mock(spec=TokenRepository)
+    event_repository = Mock(spec=EventRepository)
+
+    user_service.resolve_identifier.return_value = resolved_user_id
+    credential_repository.get_by_user_id.return_value = credential
+
+    def update_password(
+        credential_object: Any,
+        *,
+        password_hash: str,
+        changed_at: datetime,
+    ) -> Any:
+        """Update the test credential and return it."""
+        credential_object.password_hash = password_hash
+        credential_object.password_changed_at = changed_at
+        return credential_object
+
+    credential_repository.update_password.side_effect = update_password
+
+    def create_reset(**kwargs: Any) -> Any:
+        """Create a test password-reset record."""
+        return SimpleNamespace(
+            user_id=kwargs["user_id"],
+            token_hash=kwargs["token_hash"],
+            expires_at=kwargs["expires_at"],
+            is_used=False,
+            used_at=None,
+        )
+
+    password_reset_repository.create.side_effect = create_reset
+    password_reset_repository.get_active_by_token_hash.return_value = reset
+
+    def mark_used(
+        reset_object: Any,
+        *,
+        used_at: datetime,
+    ) -> Any:
+        """Mark the test reset record as used."""
+        reset_object.is_used = True
+        reset_object.used_at = used_at
+        return reset_object
+
+    password_reset_repository.mark_used.side_effect = mark_used
+    token_repository.revoke_all_for_user.return_value = 1
+
+    def create_security_event(**kwargs: Any) -> Any:
+        """Create a test security event."""
+        return SimpleNamespace(**kwargs)
+
+    event_repository.create_security_event.side_effect = create_security_event
+
+    service = PasswordService(
+        user_service=cast(UserService, user_service),
+        credential_repository=cast(
+            CredentialRepository,
+            credential_repository,
+        ),
+        password_reset_repository=cast(
+            PasswordResetRepository,
+            password_reset_repository,
+        ),
+        token_repository=cast(
+            TokenRepository,
+            token_repository,
+        ),
+        event_repository=cast(
+            EventRepository,
+            event_repository,
+        ),
+    )
+
+    return (
+        service,
+        user_service,
+        credential_repository,
+        password_reset_repository,
+        token_repository,
+        event_repository,
+    )
+
+
+def test_change_password_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Change an active user's password successfully."""
+    user_id = uuid4()
+    now = datetime.now(UTC)
+
+    credential = SimpleNamespace(
+        user_id=user_id,
+        password_hash="old-hash",
+        is_active=True,
+        password_changed_at=now,
+    )
+
+    (
+        service,
+        _user_service,
+        credential_repository,
+        _password_reset_repository,
+        token_repository,
+        event_repository,
+    ) = build_service(credential=credential)
+
+    def verify_password(
+        password: str,
+        password_hash: str,
+    ) -> bool:
+        """Verify the expected test password."""
+        return (
+            password == "OldPassword123"
+            and password_hash == "old-hash"
+        )
+
+    def hash_password(password: str) -> str:
+        """Return a deterministic test password hash."""
+        return f"hash:{password}"
+
+    monkeypatch.setattr(
+        "app.services.password_service.verify_password",
+        verify_password,
+    )
+    monkeypatch.setattr(
+        "app.services.password_service.hash_password",
+        hash_password,
+    )
+
+    result = service.change_password(
+        user_id=user_id,
+        current_password="OldPassword123",
+        new_password="NewPassword123",
+        now=now,
+    )
+
+    assert result.changed is True
+    assert result.user_id == user_id
+    assert credential.password_hash == "hash:NewPassword123"
+    assert credential.password_changed_at == now
+
+    credential_repository.update_password.assert_called_once()
+
+    token_repository.revoke_all_for_user.assert_called_once_with(
+        user_id=user_id,
+        revoked_at=now,
+        context_type="PERSONAL",
+        organization_id=None,
+        membership_id=None,
+    )
+
+    event_repository.create_security_event.assert_called_once()
+
+    event_call = event_repository.create_security_event.call_args.kwargs
+    assert event_call["user_id"] == user_id
+    assert event_call["event_type"] == EVENT_PASSWORD_CHANGED
+
+
+def test_change_password_rejects_invalid_current_password(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reject a password change when the current password is invalid."""
+    user_id = uuid4()
+
+    credential = SimpleNamespace(
+        user_id=user_id,
+        password_hash="old-hash",
+        is_active=True,
+        password_changed_at=datetime.now(UTC),
+    )
+
+    service, _user_service, *_repositories = build_service(
+        credential=credential,
+    )
+
+    def verify_password(
+        _password: str,
+        _password_hash: str,
+    ) -> bool:
+        """Always reject the supplied current password."""
+        return False
+
+    monkeypatch.setattr(
+        "app.services.password_service.verify_password",
+        verify_password,
+    )
+
+    with pytest.raises(InvalidCredentialsError):
+        service.change_password(
+            user_id=user_id,
+            current_password="wrong",
+            new_password="NewPassword123",
+        )
+
+
+def test_change_password_rejects_missing_credential() -> None:
+    """Reject a password change when no credential exists."""
+    service, _user_service, *_repositories = build_service(
+        credential=None,
+    )
+
+    with pytest.raises(InvalidCredentialsError):
+        service.change_password(
+            user_id=uuid4(),
+            current_password="OldPassword123",
+            new_password="NewPassword123",
+        )
+
+
+def test_change_password_rejects_inactive_credential(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reject a password change for an inactive credential."""
+    credential = SimpleNamespace(
+        password_hash="old-hash",
+        is_active=False,
+        password_changed_at=datetime.now(UTC),
+    )
+
+    service, _user_service, *_repositories = build_service(
+        credential=credential,
+    )
+
+    def verify_password(
+        _password: str,
+        _password_hash: str,
+    ) -> bool:
+        """Return true so the inactive check is exercised."""
+        return True
+
+    monkeypatch.setattr(
+        "app.services.password_service.verify_password",
+        verify_password,
+    )
+
+    with pytest.raises(InvalidCredentialsError):
+        service.change_password(
+            user_id=uuid4(),
+            current_password="OldPassword123",
+            new_password="NewPassword123",
+        )
+
+
+def test_change_password_rejects_same_password(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reject a password change when both passwords are identical."""
+    credential = SimpleNamespace(
+        password_hash="old-hash",
+        is_active=True,
+        password_changed_at=datetime.now(UTC),
+    )
+
+    service, _user_service, *_repositories = build_service(
+        credential=credential,
+    )
+
+    def verify_password(
+        _password: str,
+        _password_hash: str,
+    ) -> bool:
+        """Return true so the same-password check is exercised."""
+        return True
+
+    monkeypatch.setattr(
+        "app.services.password_service.verify_password",
+        verify_password,
+    )
+
+    with pytest.raises(InvalidCredentialsError):
+        service.change_password(
+            user_id=uuid4(),
+            current_password="SamePassword123",
+            new_password="SamePassword123",
+        )
+
+
+def test_hash_reset_token_is_deterministic() -> None:
+    """Hashing the same reset token produces the same digest."""
+    token = "example-reset-token"
+
+    first = PasswordService.hash_reset_token(token)
+    second = PasswordService.hash_reset_token(token)
+
+    assert first == second
+    assert first != token
+    assert len(first) == 64
+
+
+def test_request_reset_unknown_identifier_does_not_create_token() -> None:
+    """Do not generate a reset token for an unknown identifier."""
+    (
+        service,
+        user_service,
+        _credential_repository,
+        password_reset_repository,
+        _token_repository,
+        event_repository,
+    ) = build_service(resolved_user_id=None)
+
+    result = service.request_reset(
+        identifier="unknown@example.com",
+    )
+
+    assert result.requested is True
+    assert result.reset_token is None
+
+    user_service.resolve_identifier.assert_called_once_with(
+        identifier="unknown@example.com",
+    )
+    password_reset_repository.create.assert_not_called()
+    event_repository.create_security_event.assert_not_called()
+
+
+def test_request_reset_known_identifier(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Create a reset request for a known identifier."""
+    user_id = uuid4()
+
+    (
+        service,
+        _user_service,
+        _credential_repository,
+        password_reset_repository,
+        _token_repository,
+        event_repository,
+    ) = build_service(
+        resolved_user_id=user_id,
+    )
+
+    def token_urlsafe(_length: int) -> str:
+        """Return a deterministic reset token for testing."""
+        return "raw-reset-token"
+
+    monkeypatch.setattr(
+        "app.services.password_service.token_urlsafe",
+        token_urlsafe,
+    )
+
+    result = service.request_reset(
+        identifier="known@example.com",
+    )
+
+    assert result.requested is True
+    assert result.reset_token == "raw-reset-token"
+
+    password_reset_repository.create.assert_called_once()
+
+    create_call = password_reset_repository.create.call_args.kwargs
+    assert create_call["user_id"] == user_id
+    assert create_call["token_hash"] == (
+        PasswordService.hash_reset_token("raw-reset-token")
+    )
+
+    event_repository.create_security_event.assert_called_once()
+
+    event_call = event_repository.create_security_event.call_args.kwargs
+    assert event_call["user_id"] == user_id
+    assert event_call["event_type"] == EVENT_PASSWORD_RESET_REQUESTED
+
+
+def test_confirm_reset_rejects_invalid_token() -> None:
+    """Reject a password reset when the reset token is invalid."""
+    (
+        service,
+        _user_service,
+        _credential_repository,
+        password_reset_repository,
+        _token_repository,
+        _event_repository,
+    ) = build_service(reset=None)
+
+    with pytest.raises(PasswordResetError):
+        service.confirm_reset(
+            reset_token="invalid-token",
+            new_password="NewPassword123",
+        )
+
+    password_reset_repository.get_active_by_token_hash.assert_called_once_with(
+        token_hash=PasswordService.hash_reset_token("invalid-token"),
+        now=ANY,
+    )
+
+
+def test_confirm_reset_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Complete a valid password reset successfully."""
+    user_id = uuid4()
+    now = datetime.now(UTC)
+
+    reset = SimpleNamespace(
+        user_id=user_id,
+        is_used=False,
+        used_at=None,
+    )
+
+    credential = SimpleNamespace(
+        user_id=user_id,
+        password_hash="old-hash",
+        is_active=True,
+        password_changed_at=now,
+    )
+
+    (
+        service,
+        _user_service,
+        credential_repository,
+        password_reset_repository,
+        token_repository,
+        event_repository,
+    ) = build_service(
+        credential=credential,
+        reset=reset,
+    )
+
+    def hash_password(password: str) -> str:
+        """Return a deterministic test password hash."""
+        return f"hash:{password}"
+
+    monkeypatch.setattr(
+        "app.services.password_service.hash_password",
+        hash_password,
+    )
+
+    result = service.confirm_reset(
+        reset_token="valid-token",
+        new_password="NewPassword123",
+        now=now,
+    )
+
+    assert result.reset is True
+    assert result.user_id == user_id
+    assert reset.is_used is True
+    assert reset.used_at == now
+    assert credential.password_hash == "hash:NewPassword123"
+    assert credential.password_changed_at == now
+
+    credential_repository.update_password.assert_called_once()
+
+    password_reset_repository.mark_used.assert_called_once_with(
+        reset,
+        used_at=now,
+    )
+
+    token_repository.revoke_all_for_user.assert_called_once_with(
+        user_id=user_id,
+        revoked_at=now,
+        context_type="PERSONAL",
+        organization_id=None,
+        membership_id=None,
+    )
+
+    event_repository.create_security_event.assert_called_once()
+
+    event_call = event_repository.create_security_event.call_args.kwargs
+    assert event_call["user_id"] == user_id
+    assert event_call["event_type"] == EVENT_PASSWORD_RESET_COMPLETED
+
+
+def test_confirm_reset_rejects_missing_credential() -> None:
+    """Reject a password reset when the user has no credential."""
+    user_id = uuid4()
+
+    reset = SimpleNamespace(
+        user_id=user_id,
+        is_used=False,
+        used_at=None,
+    )
+
+    (
+        service,
+        _user_service,
+        credential_repository,
+        password_reset_repository,
+        token_repository,
+        event_repository,
+    ) = build_service(
+        credential=None,
+        reset=reset,
+    )
+
+    with pytest.raises(PasswordResetError):
+        service.confirm_reset(
+            reset_token="valid-token",
+            new_password="NewPassword123",
+        )
+
+    credential_repository.update_password.assert_not_called()
+    password_reset_repository.mark_used.assert_not_called()
+    token_repository.revoke_all_for_user.assert_not_called()
+    event_repository.create_security_event.assert_not_called()
+

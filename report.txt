@@ -1,0 +1,1680 @@
+BuildOS Authentication Service — Complete Technical Audit & Production Readiness Review
+1. PRIMARY OBJECTIVE
+Determine the exact current state of the BuildOS Authentication Service based solely on the supplied source files.
+2. REVIEW RULES OBSERVED
+Every supplied file was inspected line-by-line.
+No functionality was assumed to exist based on filenames, docstrings, or directory structure.
+All major flows were traced end-to-end from API → schema → service → repository → model → security → integration → response.
+Files not supplied (e.g., pyproject.toml, alembic.ini, Dockerfile) are classified as MISSING / Cannot verify.
+3. REPOSITORY INVENTORY
+A. Root / Project Configuration
+Table
+File	Status
+pyproject.toml	MISSING — Not in supplied files. Referenced in docs.
+alembic.ini	MISSING — Not in supplied files. Referenced in docs.
+.env.example	MISSING — Not in supplied files. Referenced in docs.
+.gitignore	MISSING — Not in supplied files.
+Dockerfile	MISSING — Not in supplied files. Referenced in docs.
+docker-compose.yml	MISSING — Not in supplied files. Referenced in docs.
+README.md	MISSING — Not in supplied files.
+LICENSE	MISSING — Not in supplied files.
+B. Application Code
+All 52 application files were inventoried and audited. See Section 4 for per-file status.
+C. Database Migrations
+Table
+File	Status
+migrations/env.py	PLACEHOLDER — File exists but is completely empty.
+migrations/versions/	MISSING — No version files supplied.
+D. Tests
+Table
+File	Category
+tests/api/test_auth_login.py	API integration tests
+tests/security/test_token_signing.py	Security / JWT tests
+tests/services/test_authentication_service.py	Service behavioral tests
+tests/services/test_password_service.py	Service behavioral tests
+tests/repositories/test_token_repository.py	Repository integration tests
+E. Documentation
+Table
+File	Status
+docs/architecture/IMPLEMENTATION_CHECKPOINT.md	COMPLETE — Comprehensive but partially outdated relative to code.
+4. FILE-BY-FILE AUDIT
+Table
+#	File	Category	Size/Completeness	Status	What It Does	Problems	Dependencies	Action
+1	app/__init__.py	App	Empty	PLACEHOLDER	Package marker	None	None	Leave
+2	app/api/__init__.py	API	Empty	PLACEHOLDER	Package marker	None	None	Leave
+3	app/api/dependencies.py	API	Complete	COMPLETE	DI container: DB sessions, services, current-user context	get_db imported but redefined locally; CONTEXT_PERSONAL imported but used correctly	All layers	Leave
+4	app/api/v1/__init__.py	API	Empty	PLACEHOLDER	Package marker	None	None	Leave
+5	app/api/v1/auth.py	API	Complete	PARTIAL	Login endpoint	Does not issue tokens on successful login. Returns only authenticated + user_id	LoginService	MODIFY
+6	app/api/v1/password.py	API	Complete	PARTIAL	Password change, reset request, reset confirm	Does not catch IntegrationError in request_password_reset → unhandled 500 for all non-empty identifiers	PasswordService	MODIFY
+7	app/api/v1/router.py	API	Complete	PARTIAL	V1 router aggregation	Includes empty security router	Sub-routers	MODIFY
+8	app/api/v1/security.py	API	Empty except router	STUB	Empty router registered at /security	Dead route tree	None	DELETE or implement
+9	app/api/v1/token.py	API	Complete	COMPLETE	Refresh and revoke endpoints	Refresh returns new pair; revoke marks revoked. Both correctly wired.	TokenService	Leave
+10	app/core/config.py	Core	Complete	COMPLETE	Pydantic-settings configuration	Argon2 params defined but never passed to PasswordHasher	None	MODIFY
+11	app/core/constants.py	Core	Complete	COMPLETE	String constants for events, contexts, tokens	None	None	Leave
+12	app/core/exceptions.py	Core	Complete	COMPLETE	Exception hierarchy	None	None	Leave
+13	app/core/logging.py	Core	Complete	UNUSED	Logging config	get_logger() never called by any supplied file	None	Leave
+14	app/database/base.py	DB	Complete	COMPLETE	SQLAlchemy 2.0 DeclarativeBase	None	None	Leave
+15	app/database/dependencies.py	DB	Complete	COMPLETE	FastAPI DB session dependency	None	SessionLocal	Leave
+16	app/database/session.py	DB	Complete	UNUSED	Engine, session factory, get_db() generator	get_db() defined but never imported; dependencies.py redefines its own	settings	MODIFY (remove redundant get_db)
+17	app/integrations/permission_service.py	Integration	Empty	PLACEHOLDER	Package marker	None	None	DELETE
+18	app/integrations/role_service.py	Integration	Empty	PLACEHOLDER	Package marker	None	None	DELETE
+19	app/integrations/session_service.py	Integration	Empty	PLACEHOLDER	Package marker	None	None	DELETE
+20	app/integrations/user_service.py	Integration	Complete	STUB	User resolution boundary	Always raises IntegrationError for any non-empty identifier. Login and password reset depend on this.	None	MODIFY (implement transport)
+21	app/main.py	App	Complete	PARTIAL	FastAPI app factory	No CORS, no exception handlers, no middleware, basic health check	api_router	MODIFY
+22	app/models/auth_credential.py	Model	Complete	COMPLETE	Credential table schema	None	Base	Leave
+23	app/models/auth_event.py	Model	Complete	COMPLETE	Auth event table schema	None	Base	Leave
+24	app/models/login_attempt.py	Model	Complete	COMPLETE	Login attempt table schema	None	Base	Leave
+25	app/models/password_reset.py	Model	Complete	COMPLETE	Password reset table schema	None	Base	Leave
+26	app/models/refresh_token.py	Model	Complete	COMPLETE	Refresh token table schema	None	Base	Leave
+27	app/models/security_event.py	Model	Complete	COMPLETE	Security event table schema	None	Base	Leave
+28	app/repositories/credential_repository.py	Repo	Complete	COMPLETE	CRUD + state transitions for credentials	None	AuthCredential	Leave
+29	app/repositories/event_repository.py	Repo	Complete	COMPLETE	Auth & security event persistence	None	AuthEvent, SecurityEvent	Leave
+30	app/repositories/login_attempt_repository.py	Repo	Complete	COMPLETE	Login attempt persistence + analytics	None	LoginAttempt	Leave
+31	app/repositories/password_reset_repository.py	Repo	Complete	COMPLETE	Reset token hash persistence	None	PasswordReset	Leave
+32	app/repositories/token_repository.py	Repo	Complete	COMPLETE	Refresh token lifecycle	None	RefreshToken	Leave
+33	app/schemas/auth.py	Schema	Complete	COMPLETE	Login request/response models	access_token/refresh_token fields exist but are never populated by API	None	Leave
+34	app/schemas/password.py	Schema	Complete	COMPLETE	Password change/reset schemas	None	None	Leave
+35	app/schemas/security.py	Schema	Empty	PLACEHOLDER	Empty file	None	None	DELETE
+36	app/schemas/token.py	Schema	Complete	COMPLETE	Token refresh/revoke/context schemas	None	None	Leave
+37	app/security/authentication.py	Security	Complete	COMPLETE	Credential state helpers (active, locked, etc.)	None	AuthCredential	Leave
+38	app/security/password_hashing.py	Security	Complete	PARTIAL	Argon2 password hashing	Uses default PasswordHasher(); ignores settings.password_hash_* configs	argon2	MODIFY
+39	app/security/rate_limiting.py	Security	Complete	UNUSED	Login rate-limiting helpers	Functions exist but never wired to API layer	settings	MODIFY (wire to middleware/dependencies)
+40	app/security/token_signing.py	Security	Complete	COMPLETE	JWT access/refresh token creation	Proper claims, issuer, audience, JTI, context support	jwt, settings	Leave
+41	app/security/token_validation.py	Security	Complete	COMPLETE	JWT validation with claim verification	Validates signature, issuer, audience, exp, token type, required claims	jwt, settings	Leave
+42	app/services/authentication_service.py	Service	Complete	COMPLETE	Core authentication orchestration	Lockout, event recording, attempt tracking all implemented correctly	Repos, security utils	Leave
+43	app/services/login_service.py	Service	Complete	PARTIAL	Login orchestration	Correctly delegates to UserService and AuthenticationService	UserService, AuthService	Leave
+44	app/services/logout_service.py	Service	Empty	MISSING	Logout logic	File is empty	None	CREATE
+45	app/services/password_service.py	Service	Complete	COMPLETE	Password change & reset lifecycle	Anti-enumeration, token hashing, side-effect revocation all correct	Repos, UserService	Leave
+46	app/services/security_service.py	Service	Empty	PLACEHOLDER	Security logic placeholder	File is empty	None	DELETE
+47	app/services/token_service.py	Service	Complete	COMPLETE	Token issuance, refresh, rotation, revocation	Good rotation logic; missing token-reuse detection / cascade revoke	Repos, JWT utils	MODIFY
+48	migrations/env.py	Migration	Empty	BROKEN	Alembic environment	Completely empty. Alembic cannot function.	None	CREATE
+49	tests/api/test_auth_login.py	Test	Complete	COMPLETE	API login tests with mocked service	Good coverage of success, 401, 503, validation	TestClient	Leave
+50	tests/repositories/test_token_repository.py	Test	Complete	COMPLETE	Token repo integration tests against real PostgreSQL	Requires running Postgres; good coverage	pytest, SQLAlchemy	Leave
+51	tests/security/test_token_signing.py	Test	Complete	COMPLETE	JWT signing/validation tests	Comprehensive: expiry, issuer, audience, context, token-type rejection	pytest, jwt	Leave
+52	tests/services/test_authentication_service.py	Test	Complete	COMPLETE	Auth service behavioral tests	Lockout, inactive, expired lock, context preservation, password bypass	pytest	Leave
+53	tests/services/test_password_service.py	Test	Complete	COMPLETE	Password service tests	Change, reset request, reset confirm, anti-enumeration, token revocation	pytest	Leave
+5. ARCHITECTURE REVIEW
+Layer Separation
+Table
+Layer	Assessment
+API	Clean. Routes delegate to services. No business logic leakage.
+Dependencies	Clean. Factory functions build service graphs correctly.
+Services	Clean. AuthenticationService, PasswordService, TokenService have correct boundaries.
+Repositories	Clean. No raw SQL in services. Unit-of-work via flush()/refresh().
+Security	Clean. Token, password, and authentication state utilities are separated.
+Models	Clean. SQLAlchemy 2.0 declarative style.
+Integrations	Broken. All integration files are empty or stubs.
+Architectural Problems Found
+Missing Logout Abstraction: logout_service.py is empty. There is no domain concept of logout in the service layer despite token revocation existing in TokenService.
+Unused Rate Limiting: Rate-limiting functions exist in app/security/rate_limiting.py but are never invoked by API dependencies or middleware.
+Redundant get_db(): app/database/session.py defines get_db() that is never imported; app/database/dependencies.py defines the one actually used.
+Empty Security Router: app/api/v1/security.py is an empty router registered in router.py, creating a dead route tree.
+Token Service Not Connected to Login: TokenService.issue_tokens() is implemented but never called by the login endpoint. This breaks the primary authentication flow.
+No Global Exception Handlers: FastAPI defaults will leak exception details in debug=True mode.
+Microservice Appropriateness
+The architecture is appropriate for a microservice: bounded context (auth only, not users), repository pattern, integration boundaries for cross-service calls. However, the integration boundary stubs make it non-functional.
+6. AUTHENTICATION FLOW AUDIT
+Login Flow Tracing
+Table
+Step	Component	Status	Evidence
+1. Receive identifier/password	app/api/v1/auth.py @router.post("/login")	✅ Works	LoginRequest schema validates input
+2. Resolve identifier to user_id	app/services/login_service.py → UserService.resolve_identifier()	❌ BROKEN	user_service.py:25 always raises IntegrationError
+3. Retrieve credential	AuthenticationService.authenticate() → CredentialRepository.get_by_user_id()	✅ Implemented	authentication_service.py:75
+4. Verify password	AuthenticationService.authenticate() → verify_password()	✅ Implemented	authentication_service.py:93
+5. Handle inactive account	AuthenticationService.authenticate()	✅ Works	Returns CREDENTIAL_INACTIVE
+6. Handle locked account	AuthenticationService.authenticate() → is_credential_locked()	✅ Works	Checks is_locked + locked_until
+7. Record failed attempts	AuthenticationService._handle_failed_password()	✅ Works	Increments counter, creates LoginAttempt + AuthEvent
+8. Apply lockout threshold	AuthenticationService._handle_failed_password() → should_lock_account()	✅ Works	Locks after 5 failures; creates SecurityEvent
+9. Record successful login	AuthenticationService.authenticate() → record_successful_login()	✅ Works	Resets counter, clears lock, updates last_login_at
+10. Create access token	TokenService.issue_tokens() → create_access_token()	✅ Implemented	token_signing.py:21
+11. Create refresh token	TokenService.issue_tokens() → create_refresh_token()	✅ Implemented	token_signing.py:58
+12. Persist refresh token	TokenService.issue_tokens() → TokenRepository.create()	✅ Implemented	token_service.py:78
+13. Return tokens in API	app/api/v1/auth.py login()	❌ MISSING	Returns LoginResponse(authenticated=True, user_id=user_id) — tokens are never populated
+Login Flow Status
+Fully working: Schema validation, credential verification, lockout logic, event recording.
+Partially working: Login API returns 200 but without tokens.
+Broken: User identity resolution (stub always raises IntegrationError).
+Missing: Token issuance on login response.
+External dependencies: User Service integration transport.
+Security concerns: No API-level brute-force protection (IP throttling). Domain-level lockout exists but only per-user.
+7. JWT / TOKEN SECURITY AUDIT
+Table
+Check	Status	Evidence
+Signing algorithm	✅ HS256	config.py:24
+Secret from environment	✅ jwt_secret_key required	config.py:23
+Issuer validation	✅ Checked on decode	token_validation.py:28
+Audience validation	✅ Checked on decode	token_validation.py:29
+Expiration validation	✅ Checked on decode	token_validation.py:35
+Token type enforcement	✅ Access vs Refresh rejected cross-use	token_validation.py:40-41
+Required claims	✅ sub, iss, aud, iat, exp, jti, token_type	token_validation.py:31-39
+Subject UUID validation	✅ Parsed and validated as UUID	token_validation.py:43-51
+JTI present	✅ Unique per token	token_signing.py:35, 62
+Organization context	✅ Optional claims	token_signing.py:41-46, 78-83
+Algorithm confusion protection	✅ algorithms=[settings.jwt_algorithm]	token_validation.py:27
+Weak secret enforcement	❌ MISSING	No minimum length check on jwt_secret_key
+Token binding (IP/UA)	❌ MISSING	Tokens are not bound to client fingerprint
+Token Substitution / Replay
+Access token used as refresh token: Rejected (InvalidTokenError).
+Refresh token used as access token: Rejected (InvalidTokenError).
+Expired token: Rejected (ExpiredTokenError).
+Malformed token: Rejected (InvalidTokenError).
+Security Verdict
+The JWT implementation is solid for a standard stateless service. The only gaps are lack of token binding and no minimum secret-key length enforcement.
+8. REFRESH TOKEN AUDIT
+Table
+Lifecycle Stage	Status	Evidence
+Creation	✅ Implemented	TokenService.issue_tokens()
+Hashing (SHA256)	✅ Implemented	TokenService.hash_refresh_token()
+Database storage	✅ Implemented	TokenRepository.create()
+Lookup by hash	✅ Implemented	TokenRepository.get_by_token_hash()
+Expiration check	✅ Implemented	TokenRepository.get_active_by_token_hash() + expires_at
+Revocation	✅ Implemented	TokenRepository.revoke()
+Rotation	✅ Implemented	TokenRepository.rotate() sets replaced_by_token_id
+Concurrent refresh safety	✅ Safe	Second concurrent refresh finds is_revoked=True and raises RevokedTokenError
+Token reuse detection	❌ MISSING	If a stolen token is presented after rotation, it is rejected with RevokedTokenError, but no security event is generated and other tokens in the family are not cascade-revoked
+Token family invalidation	❌ MISSING	No concept of token families; compromise of one refresh token does not invalidate siblings
+Stolen Refresh Token Reuse
+A stolen refresh token can be detected (it will be rejected if already rotated), but the system does not alarm on reuse. A passive attacker can probe revoked tokens without triggering security events. This is a MEDIUM risk.
+9. PASSWORD SECURITY AUDIT
+Table
+Check	Status	Evidence
+Argon2 hashing	✅ Used	password_hashing.py:12
+Plaintext storage	❌ Never stored	Only hashes persisted
+Password verification	✅ Implemented	password_hashing.py:19
+Rehash detection	✅ Implemented	password_hashing.py:31
+Configurable Argon2 params	❌ Ignored	config.py:26-28 defined but PasswordHasher() uses defaults
+Password change flow	✅ Implemented	PasswordService.change_password()
+Password reset flow	✅ Implemented	PasswordService.request_reset() / confirm_reset()
+Reset token entropy	✅ High	token_urlsafe(48) = 288 bits
+Reset token hashing	✅ SHA256	PasswordService.hash_reset_token()
+Reset token expiration	✅ 30 min default	config.py:33
+Reset token reuse prevention	✅ is_used flag	password_reset_repository.py:67
+Side-effect: token revocation on reset	✅ Implemented	password_service.py:191 revokes all refresh tokens
+Side-effect: token revocation on change	✅ Implemented	password_service.py:108
+Anti-enumeration (reset request)	✅ Implemented	Returns requested=True even for unknown identifiers
+Reset token delivery	❌ MISSING	Token is generated but never sent to user (no email/SMS transport)
+Password strength validation	❌ Weak	Only min/max length checked; no complexity rules
+Password Reset Enumeration
+The endpoint POST /password/reset/request returns identical responses for known and unknown identifiers. However, it raises an unhandled IntegrationError for all non-empty identifiers because UserService is a stub, causing a 500 error instead of the intended uniform 200. This breaks anti-enumeration in practice.
+10. ACCOUNT LOCKOUT / RATE LIMITING AUDIT
+Domain-Level Lockout
+Table
+Check	Status	Evidence
+Failed-attempt threshold	✅ 5 attempts	config.py:30
+Lock duration	✅ 15 minutes	config.py:31
+Reset on successful login	✅ Yes	credential_repository.py:46
+Permanent lock support	✅ Yes	locked_until=None means permanent
+API-Level Rate Limiting
+Table
+Check	Status	Evidence
+IP-based throttling	❌ MISSING	No middleware or dependency
+Identifier-based throttling	❌ MISSING	rate_limiting.py exists but never called
+Distributed rate limiting	❌ MISSING	No Redis integration
+Password-reset abuse protection	❌ MISSING	No rate limiting on reset request
+Brute-Force Verdict
+An attacker can brute-force passwords without IP throttling until the account locks. With 5 attempts per 15 minutes per account, distributed attacks are partially mitigated, but the lack of IP-level or global rate limiting is a HIGH concern for production.
+11. PASSWORD RESET ENUMERATION AUDIT
+Table
+Check	Status	Evidence
+HTTP status uniform	❌ BROKEN	IntegrationError not caught → 500 for all real requests
+Response structure uniform	✅ Intended	PasswordResetRequestResponse(requested=True)
+Response timing	⚠️ Unverified	Not tested
+Reset token in API response	✅ Not leaked	API returns only requested boolean
+Error messages	❌ Leaky	Unhandled IntegrationError exposes internal state in debug mode
+Logging	⚠️ No reset request logging	Events recorded in DB, but no application logs
+Conclusion: Anti-enumeration is implemented in the service layer but broken in the API layer due to the unhandled IntegrationError.
+12. LOGOUT AUDIT
+Table
+Check	Status
+Logout API endpoint	❌ MISSING
+Logout service	❌ MISSING (logout_service.py is empty)
+Revoke current refresh token	❌ Not implemented
+Revoke all user refresh tokens	✅ Implemented in TokenService.revoke_all() but not exposed via API
+Session invalidation	❌ MISSING (Session Service integration is empty)
+Auth event on logout	❌ MISSING (EVENT_LOGOUT constant exists but never used)
+Security event on logout	❌ MISSING
+Recommended behavior for this architecture:
+POST /auth/logout → revoke the presented refresh token (current session only).
+POST /auth/logout/all → revoke all refresh tokens for the user.
+Record EVENT_LOGOUT or EVENT_LOGOUT_ALL auth events.
+The Session Service (022) should be notified if session lifecycle is managed externally.
+13. DATABASE AUDIT
+Models vs Migrations
+Table
+Model	Table	Migration Exists	Status
+AuthCredential	auth_credentials	❌ No	Schema defined, no migration
+AuthEvent	auth_events	❌ No	Schema defined, no migration
+LoginAttempt	login_attempts	❌ No	Schema defined, no migration
+PasswordReset	password_resets	❌ No	Schema defined, no migration
+RefreshToken	refresh_tokens	❌ No	Schema defined, no migration
+SecurityEvent	security_events	❌ No	Schema defined, no migration
+Schema Quality
+Indexes: Appropriate indexes on user_id, token_hash, event_type, context_type, organization_id, membership_id, is_used, is_revoked, expires_at.
+Unique constraints: auth_credentials.user_id, refresh_tokens.token_hash, password_resets.token_hash.
+Defaults: Server defaults for timestamps and booleans are correctly defined.
+Foreign keys: Intentionally absent (microservice boundary). Correct.
+Timestamps: All tables have created_at / occurred_at with timezone-aware DateTime.
+Verdict
+The SQLAlchemy models are production-quality, but no migrations exist to create the tables.
+14. ALEMBIC AUDIT
+Table
+Check	Status	Evidence
+alembic.ini exists	❌ MISSING	Not in supplied files
+migrations/env.py exists	✅ Yes	File present
+migrations/env.py functional	❌ NO	File is completely empty
+migrations/versions/ exists	✅ Directory referenced	No version files supplied
+SQLAlchemy metadata imported	❌ NO	env.py is empty
+alembic upgrade head would work	❌ NO	env.py has no run_migrations_online() or config loading
+New migration generation possible	❌ NO	env.py cannot import metadata or configure context
+Verdict: Alembic is completely non-functional. The env.py file must be rewritten from scratch.
+15. API AUDIT
+Table
+Method	Endpoint	Implemented?	Service	Auth Required?	Status	Problems
+POST	/api/v1/auth/login	✅ Yes	LoginService	No	PARTIAL	Does not return tokens
+POST	/api/v1/token/refresh	✅ Yes	TokenService	No	COMPLETE	Works correctly
+POST	/api/v1/token/revoke	✅ Yes	TokenService	No	COMPLETE	Works correctly
+POST	/api/v1/password/change	✅ Yes	PasswordService	✅ Yes	COMPLETE	Requires valid access token
+POST	/api/v1/password/reset/request	✅ Yes	PasswordService	No	BROKEN	Unhandled IntegrationError
+POST	/api/v1/password/reset/confirm	✅ Yes	PasswordService	No	COMPLETE	Works if token valid
+GET	/health	✅ Yes	—	No	COMPLETE	Basic health check
+—	/api/v1/security/*	❌ No	—	—	STUB	Empty router
+Missing Endpoints:
+POST /api/v1/auth/logout
+POST /api/v1/auth/logout/all
+POST /api/v1/auth/register (intentionally out of scope per architecture doc)
+16. DEPENDENCY-INJECTION AUDIT
+Table
+Dependency	Instantiated?	Lifecycle	Used?	Issues
+get_db	✅ SessionLocal	Per-request generator	✅ Yes	session.py has unused duplicate
+get_user_service	✅ UserService()	Per-request	✅ Yes	Always returns new instance
+get_authentication_service	✅ Builds repos + service	Per-request	✅ Yes	Correct graph
+get_login_service	✅ Builds LoginService	Per-request	✅ Yes	Correct graph
+get_password_service	✅ Builds repos + service	Per-request	✅ Yes	Correct graph
+get_token_service	✅ Builds repos + service	Per-request	✅ Yes	Correct graph
+get_current_user_context	✅ Validates JWT	Per-request	✅ Yes	Used by password change
+Issues:
+UserService has no persistent HTTP client / transport. It is instantiated fresh each request but contains no state.
+No dependency caching for expensive objects.
+17. INTEGRATION AUDIT
+| Integration | File | Status | Required? | Verdict |
+|-------------|------|--------
+contine
+Edit
+Copy
+Share
+Finish Remaining Audit Sections Integration Security Code Coverage Deployment
+|-------------|------|--------|-----------|---------|
+| User Service | app/integrations/user_service.py | STUB | ✅ Yes | Critical for login and password reset. Currently raises IntegrationError for all inputs. |
+| Role Service | app/integrations/role_service.py | PLACEHOLDER | ❌ No | Not referenced by any supplied file. |
+| Permission Service | app/integrations/permission_service.py | PLACEHOLDER | ❌ No | Not referenced by any supplied file. |
+| Session Service | app/integrations/session_service.py | PLACEHOLDER | ❌ No | Not referenced by any supplied file. |
+Verdict: Only the User Service integration is required by the current architecture. The other three integration files are dead weight and should be removed until needed.
+18. USER / ORGANIZATION CONTEXT AUDIT
+Table
+Aspect	Status	Evidence
+context_type claim in JWT	✅ Implemented	token_signing.py:36, token_validation.py
+organization_id claim in JWT	✅ Implemented	Optional claim in access/refresh tokens
+membership_id claim in JWT	✅ Implemented	Optional claim in access/refresh tokens
+context_type in refresh token DB	✅ Implemented	refresh_token.py:33
+organization_id in refresh token DB	✅ Implemented	refresh_token.py:39
+membership_id in refresh token DB	✅ Implemented	refresh_token.py:45
+Login attempt context recording	✅ Implemented	login_attempt.py:27-42
+Auth event context recording	✅ Implemented	auth_event.py:24-39
+Security event context recording	✅ Implemented	security_event.py:24-39
+Organization context authorization	❌ MISSING	Auth Service accepts organization_id/membership_id in JWT but never validates whether the user actually belongs to that organization. It trusts the claims.
+Membership verification	❌ MISSING	No call to User Service or Membership Service to verify membership_id is valid for the user.
+Trust Boundaries
+The Auth Service currently assumes that if an organization_id and membership_id are present in the JWT, they were valid at issuance time. There is no runtime verification during refresh or password change that the context is still authorized. This is acceptable if the issuing authority (this service or a trusted upstream) validates membership at login time, but there is no evidence in the code that this happens.
+Risk: If a user is removed from an organization, their existing refresh tokens may continue to function until expiry or explicit revocation.
+19. SECURITY EVENT AUDIT
+Table
+Event	Created?	Where?	Correct Context?	Missing?
+LOGIN_SUCCESS	✅ Yes	authentication_service.py:116	✅ Yes	—
+LOGIN_FAILURE	✅ Yes	authentication_service.py:159, 174	✅ Yes	—
+LOGOUT	❌ NO	—	—	No logout endpoint/service
+LOGOUT_ALL	❌ NO	—	—	No logout-all endpoint
+TOKEN_REFRESH	✅ Yes	token_service.py:172	✅ Yes	—
+TOKEN_REVOKED	✅ Yes	token_service.py:232	✅ Yes	—
+ACCOUNT_LOCKED	✅ Yes	authentication_service.py:148	✅ Yes	Severity warning
+ACCOUNT_UNLOCKED	❌ NO	—	—	Constant exists but never emitted
+PASSWORD_CHANGED	✅ Yes	password_service.py:112	✅ Yes	—
+PASSWORD_RESET_REQUESTED	✅ Yes	password_service.py:155	✅ Yes	—
+PASSWORD_RESET_COMPLETED	✅ Yes	password_service.py:197	✅ Yes	—
+Suspicious authentication	❌ NO	—	—	No anomaly detection logic
+Unauthorized org access	❌ NO	—	—	No org access validation
+Security Event Quality
+No secrets in events: ✅ Verified. Events store user_id, ip_address, user_agent, context_type, event_type, and metadata JSON. No passwords or tokens.
+Metadata JSON: Used for failure reasons ({"reason":"INVALID_CREDENTIALS"}). Safe.
+20. TEST COVERAGE AUDIT
+Table
+Feature	Unit Test	Integration Test	API Test	Security Test	Missing Coverage
+Valid login	✅ test_authentication_service.py	❌ No	✅ test_auth_login.py	❌ No	Real DB integration; token issuance on login
+Invalid password	✅ test_authentication_service.py	❌ No	✅ test_auth_login.py	❌ No	Brute-force API behavior
+Unknown user	✅ test_authentication_service.py	❌ No	✅ test_auth_login.py (via InvalidCredentialsError)	❌ No	—
+Inactive account	✅ test_authentication_service.py	❌ No	❌ No	❌ No	API-level 401 for inactive
+Locked account	✅ test_authentication_service.py	❌ No	❌ No	❌ No	API-level 401 for locked
+Lockout threshold	✅ test_authentication_service.py	❌ No	❌ No	❌ No	—
+Lock expiration	✅ test_authentication_service.py	❌ No	❌ No	❌ No	—
+Successful login after lockout	✅ test_authentication_service.py	❌ No	❌ No	❌ No	—
+Login event recording	✅ test_authentication_service.py	❌ No	❌ No	❌ No	Assert on create_auth_event call
+Login attempt recording	✅ test_authentication_service.py	❌ No	❌ No	❌ No	Assert on login_attempt_repository.create
+Access-token creation	❌ No	❌ No	❌ No	✅ test_token_signing.py	—
+Refresh-token creation	❌ No	❌ No	❌ No	✅ test_token_signing.py	—
+Token validation	❌ No	❌ No	❌ No	✅ test_token_signing.py	—
+Token expiration	❌ No	❌ No	❌ No	✅ test_token_signing.py	—
+Token issuer/audience	❌ No	❌ No	❌ No	✅ test_token_signing.py	—
+Token type enforcement	❌ No	❌ No	❌ No	✅ test_token_signing.py	—
+Token refresh endpoint	❌ No	❌ No	❌ No	❌ No	CRITICAL GAP
+Token rotation	❌ No	❌ No	❌ No	❌ No	CRITICAL GAP
+Token revocation endpoint	❌ No	❌ No	❌ No	❌ No	CRITICAL GAP
+Token reuse detection	❌ No	❌ No	❌ No	❌ No	Not implemented
+Change password	✅ test_password_service.py	❌ No	❌ No	❌ No	API-level test
+Wrong current password	✅ test_password_service.py	❌ No	❌ No	❌ No	API-level test
+Reset request	✅ test_password_service.py	❌ No	❌ No	❌ No	API-level test
+Reset unknown user	✅ test_password_service.py	❌ No	❌ No	❌ No	API-level test
+Reset token expiration	❌ No	❌ No	❌ No	❌ No	MISSING
+Reset token reuse	❌ No	❌ No	❌ No	❌ No	MISSING
+Reset confirmation	✅ test_password_service.py	❌ No	❌ No	❌ No	API-level test
+Token revocation after reset	✅ test_password_service.py	❌ No	❌ No	❌ No	Asserted on mock
+Repository: token CRUD	❌ No	✅ test_token_repository.py	❌ No	❌ No	—
+Repository: token active query	❌ No	✅ test_token_repository.py	❌ No	❌ No	—
+Repository: token revoke	❌ No	✅ test_token_repository.py	❌ No	❌ No	—
+Repository: token rotate	❌ No	✅ test_token_repository.py	❌ No	❌ No	—
+Repository: scoped revocation	❌ No	✅ test_token_repository.py	❌ No	❌ No	—
+API: validation failures	❌ Partial	❌ No	✅ test_auth_login.py	❌ No	Missing body for password/refresh
+API: HTTP status codes	✅ Partial	❌ No	✅ test_auth_login.py	❌ No	Only login tested
+Brute-force protection	❌ No	❌ No	❌ No	❌ No	CRITICAL GAP
+User enumeration	❌ No	❌ No	❌ No	❌ No	CRITICAL GAP
+Token replay	❌ No	❌ No	❌ No	❌ No	CRITICAL GAP
+Privilege/context escalation	❌ No	❌ No	❌ No	❌ No	CRITICAL GAP
+Test Summary
+Service-layer tests: Good coverage for authentication and password flows.
+Security tests: Good coverage for JWT signing/validation.
+Repository tests: Good coverage for token repository against real PostgreSQL.
+API tests: Severely lacking. Only login endpoint is tested. Token refresh, token revoke, password change, password reset endpoints have zero API tests.
+Integration tests: None exist that test end-to-end flows through real services.
+21. CODE QUALITY AUDIT
+Correct Code
+Type annotations are consistently used across all non-empty files.
+SQLAlchemy 2.0 style (Mapped, mapped_column) is correctly applied.
+Pydantic v2 ConfigDict is used correctly.
+Exception chaining (from exc) is used properly.
+Repository pattern avoids raw SQL.
+Code-Quality Issues
+Table
+Issue	Severity	File	Evidence
+get_db() defined twice	Low	session.py, dependencies.py	session.py:20-29 duplicates dependencies.py:12-20
+CONTEXT_PERSONAL imported but string literals used in models	Low	auth_event.py, login_attempt.py, refresh_token.py, security_event.py	Models use "PERSONAL" string instead of imported constant
+settings = get_settings() called at module level	Low	session.py:15, config.py:55	Works with lru_cache, but lazy loading is preferred
+pylint: disable=too-many-arguments	Low	event_repository.py, login_attempt_repository.py, token_repository.py	Indicates parameter bloat; acceptable for repositories
+Architectural Issues
+Table
+Issue	Severity	File	Evidence
+TokenService never called by login API	HIGH	auth.py	Login returns 200 without tokens
+rate_limiting.py never wired	HIGH	rate_limiting.py	Dead code until connected
+UserService is a hard stub	HIGH	user_service.py	All login flows fail
+logout_service.py empty	MEDIUM	logout_service.py	No logout abstraction
+security_service.py empty	LOW	security_service.py	Placeholder
+Security Issues
+Table
+Issue	Severity	File	Evidence
+No minimum JWT secret length	MEDIUM	config.py	jwt_secret_key: str accepts any length
+Argon2 defaults ignore config	MEDIUM	password_hashing.py:12	PasswordHasher() ignores settings.password_hash_*
+No API rate limiting	HIGH	auth.py, password.py, token.py	No @limiter or dependency
+Reset request leaks 500 errors	MEDIUM	password.py:66-70	IntegrationError not caught
+Token reuse does not alarm	MEDIUM	token_service.py	Revoked token use raises error but no security event
+22. CONFIGURATION AUDIT
+Table
+Setting	Required	Default	Production Safe?	Issue
+service_name	No	buildos-auth-service	✅ Yes	—
+environment	No	development	❌ NO	Must be overridden in prod
+debug	No	False	✅ Yes	—
+database_url	Yes	—	⚠️	Must be set; no validation of format
+jwt_secret_key	Yes	—	❌ NO	No minimum length; crash on missing
+jwt_algorithm	No	HS256	✅ Yes	—
+jwt_issuer	No	buildos-auth-service	✅ Yes	—
+jwt_audience	No	buildos-api	✅ Yes	—
+access_token_expire_minutes	No	15	✅ Yes	—
+refresh_token_expire_days	No	30	✅ Yes	—
+password_hash_time_cost	No	3	⚠️	Ignored by PasswordHasher()
+password_hash_memory_cost	No	65536	⚠️	Ignored by PasswordHasher()
+password_hash_parallelism	No	4	⚠️	Ignored by PasswordHasher()
+max_failed_login_attempts	No	5	✅ Yes	—
+login_lockout_minutes	No	15	✅ Yes	—
+login_rate_limit_window_minutes	No	15	✅ Yes	—
+password_reset_expire_minutes	No	30	✅ Yes	—
+Production Startup Safety
+The application can start in production if:
+DATABASE_URL is set to a valid PostgreSQL connection string.
+JWT_SECRET_KEY is set to a cryptographically strong secret (≥32 bytes).
+However, it will fail on the first login because UserService raises IntegrationError.
+Missing Configuration
+CORS origins: Not configured.
+Trusted hosts: Not configured.
+Logging level: Hardcoded to INFO in configure_logging().
+Sentry/error tracking: Not configured.
+23. DEPLOYMENT AUDIT
+Table
+Component	Status	Evidence
+Dockerfile	❌ MISSING	Referenced in docs; not supplied
+docker-compose.yml	❌ MISSING	Referenced in docs; not supplied
+.env.example	❌ MISSING	Referenced in docs; not supplied
+pyproject.toml	❌ MISSING	Referenced in docs; not supplied
+Health check endpoint	✅ Implemented	main.py:28-35
+Production server (Uvicorn/Gunicorn)	❌ MISSING	No startup script or CMD
+Database migrations on startup	❌ MISSING	No alembic upgrade head in entrypoint
+PostgreSQL connectivity	⚠️ Unverified	database_url must be valid
+Deployment Verdict
+The service cannot be realistically deployed with the supplied files. Critical deployment artifacts are missing. Even if the application code were complete, there is no container definition, no dependency manifest (pyproject.toml), and no migration runner.
+24. DOCUMENTATION AUDIT
+Table
+Document	Status	Assessment
+IMPLEMENTATION_CHECKPOINT.md	Partial	Comprehensive architecture and planning. Outdated in places: claims "Database: Not yet implemented" but models exist; claims "Password hashing implementation" not done but password_hashing.py is complete.
+README.md	Missing	Not supplied.
+API documentation	Missing	No OpenAPI extensions or external docs. FastAPI auto-generates /docs, but no custom descriptions.
+Setup instructions	Missing	No SETUP.md or equivalent.
+Environment variable reference	Missing	No .env.example.
+Security model documentation	Missing	No SECURITY.md.
+Contradictions in Documentation
+The checkpoint document states multiple items as "Not yet implemented" that are actually implemented in the code:
+"SQLAlchemy configuration" → database/session.py exists.
+"Password hashing implementation" → password_hashing.py exists.
+"Initial database migration" → Still missing (correct).
+"Login implementation" → Partially implemented (correct).
+25. EMPTY / PLACEHOLDER FILE AUDIT
+Table
+File	Why It Exists	Current State	Is It Needed?	Recommendation
+app/__init__.py	Package marker	Empty	✅ Yes	Leave
+app/api/__init__.py	Package marker	Empty	✅ Yes	Leave
+app/api/v1/__init__.py	Package marker	Empty	✅ Yes	Leave
+app/api/v1/security.py	Future security endpoints	Empty router	❌ No	DELETE — no endpoints planned
+app/integrations/permission_service.py	Future integration	Empty	❌ No	DELETE
+app/integrations/role_service.py	Future integration	Empty	❌ No	DELETE
+app/integrations/session_service.py	Future integration	Empty	❌ No	DELETE
+app/schemas/security.py	Future security schemas	Empty	❌ No	DELETE
+app/services/logout_service.py	Logout abstraction	Empty	✅ Yes	CREATE implementation
+app/services/security_service.py	Security logic placeholder	Empty	❌ No	DELETE
+migrations/env.py	Alembic environment	Empty	✅ Yes	CREATE implementation
+tests/__init__.py	Package marker	Empty	✅ Yes	Leave
+tests/api/__init__.py	Package marker	Empty	✅ Yes	Leave
+tests/repositories/__init__.py	Package marker	Empty	✅ Yes	Leave
+tests/services/__init__.py	Package marker	Empty	✅ Yes	Leave
+26. DEAD CODE / UNUSED CODE AUDIT
+Table
+Item	Type	Used?	Recommendation
+app/database/session.py:get_db()	Function	❌ No	Remove — duplicate of dependencies.py:get_db()
+app/core/logging.py:configure_logging()	Function	✅ Yes (in main.py)	Keep
+app/core/logging.py:get_logger()	Function	❌ No	Keep — utility for future use
+app/security/rate_limiting.py	Module	❌ No (internally)	Wire to API or remove
+app/api/v1/security.py	Router	✅ Registered but empty	Remove from router.py and delete file
+app/services/security_service.py	Module	❌ No	Delete
+app/integrations/role_service.py	Module	❌ No	Delete
+app/integrations/permission_service.py	Module	❌ No	Delete
+app/integrations/session_service.py	Module	❌ No	Delete
+app/schemas/security.py	Module	❌ No	Delete
+TokenService.revoke_all()	Method	✅ Used internally	Keep — used by PasswordService
+EventRepository.get_auth_events_by_user()	Method	❌ No	Keep — utility for future audit API
+EventRepository.get_security_events_by_user()	Method	❌ No	Keep — utility for future audit API
+EventRepository.get_auth_events_by_type()	Method	❌ No	Keep — utility
+EventRepository.get_security_events_by_type()	Method	❌ No	Keep — utility
+LoginAttemptRepository.get_recent_by_identifier()	Method	❌ No	Keep — utility for future rate-limiting
+LoginAttemptRepository.get_recent_by_user()	Method	❌ No	Keep — utility
+LoginAttemptRepository.count_failed_by_identifier()	Method	❌ No	Keep — utility for future rate-limiting
+LoginAttemptRepository.count_failed_by_user()	Method	❌ No	Keep — utility
+CredentialRepository.deactivate()	Method	❌ No	Keep — utility for future admin API
+CredentialRepository.activate()	Method	❌ No	Keep — utility for future admin API
+27. SECURITY RISK RATING
+Table
+Severity	Finding	File	Evidence	Impact	Recommended Fix
+CRITICAL	Login endpoint does not issue tokens	app/api/v1/auth.py	Returns LoginResponse without access_token/refresh_token	Authentication flow is incomplete; users cannot obtain session tokens	Call TokenService.issue_tokens() and include tokens in response
+CRITICAL	User Service integration is a hard stub	app/integrations/user_service.py	resolve_identifier() raises IntegrationError for all non-empty inputs	No user can log in or request password reset	Implement HTTP client to User Service (019)
+HIGH	No API-level rate limiting	app/api/v1/auth.py, password.py, token.py	rate_limiting.py exists but never wired	Brute-force and DoS vulnerability	Add FastAPI dependency or middleware for IP-based rate limiting
+HIGH	No database migrations exist	migrations/env.py	File is empty; no version files	Tables cannot be created; service cannot persist data	Implement env.py and generate initial Alembic migration
+MEDIUM	Password reset request leaks 500 errors	app/api/v1/password.py:66-70	IntegrationError not caught in request_password_reset	Account enumeration via error response; internal error exposure	Add except IntegrationError → return requested=True
+MEDIUM	Argon2 parameters from config are ignored	app/security/password_hashing.py:12	PasswordHasher() uses defaults; config.py:26-28 unused	Password hashing may not meet organizational security policy	Pass config values to PasswordHasher(time_cost=..., memory_cost=..., parallelism=...)
+MEDIUM	No minimum JWT secret length	app/core/config.py	jwt_secret_key: str with no Field(min_length=...)	Weak secrets could be used in production	Add Field(min_length=32) or custom validator
+MEDIUM	Refresh token reuse does not generate security events	app/services/token_service.py	refresh() raises RevokedTokenError but no create_security_event call	Stolen tokens can be probed without triggering alerts	Add security event on revoked token reuse attempt
+MEDIUM	No token binding to client	app/security/token_signing.py	No IP/UA claims in JWT	Stolen tokens are fully portable	Add optional binding claims (future)
+LOW	debug=settings.debug in FastAPI	app/main.py:19	If DEBUG=true, stack traces leak	Information disclosure	Ensure debug=False in production; add explicit exception handlers
+LOW	Empty security router registered	app/api/v1/router.py:24-27	Exposes /api/v1/security with no handlers	Minor clutter; no direct security impact	Remove registration
+28. PRODUCTION BLOCKERS
+Production Blockers
+User Service Integration is a Stub
+File: app/integrations/user_service.py
+Why it blocks: Every login and password reset request calls resolve_identifier(), which unconditionally raises IntegrationError. No user can authenticate.
+Required fix: Implement HTTP client to the BuildOS User Service (019) with proper error handling and timeouts.
+Testing: Mock the HTTP transport; test success, 404, timeout, and malformed responses.
+Login Endpoint Does Not Issue Tokens
+File: app/api/v1/auth.py
+Why it blocks: Successful login returns authenticated=True and user_id but no access_token or refresh_token. The client cannot make authenticated requests.
+Required fix: Inject TokenService into the login endpoint, call issue_tokens(), and populate the response.
+Testing: Update test_login_success to assert tokens are present and valid.
+No Database Migrations
+File: migrations/env.py (empty)
+Why it blocks: The service cannot create its database schema. On a fresh PostgreSQL instance, all queries will fail with "relation does not exist."
+Required fix: Implement migrations/env.py with SQLAlchemy metadata import, generate initial migration with alembic revision --autogenerate, verify upgrade and downgrade.
+Testing: Run migration against clean Postgres container in CI.
+No API-Level Rate Limiting
+Files: app/api/v1/auth.py, app/security/rate_limiting.py
+Why it blocks: Without IP-based or global rate limiting, the login endpoint is vulnerable to distributed brute-force attacks and password-reset abuse.
+Required fix: Wire rate_limiting.py logic into FastAPI dependencies or add a middleware (e.g., slowapi or custom Redis-backed limiter).
+Testing: Load-test login endpoint; verify 429 responses after threshold.
+Missing Deployment Artifacts
+Files: Dockerfile, docker-compose.yml, pyproject.toml, .env.example
+Why it blocks: The service cannot be built, dependencies cannot be installed, and environment configuration is undocumented.
+Required fix: Create pyproject.toml with dependencies, Dockerfile with multi-stage build, docker-compose.yml with Postgres, and .env.example.
+Testing: Build container, run docker compose up, verify health endpoint.
+Non-Blocking Improvements
+Add logout endpoint and service.
+Add token-reuse security events.
+Add password complexity validation.
+Add CORS configuration.
+Add structured JSON logging.
+Add OpenAPI tag descriptions.
+Remove empty placeholder files.
+Add API tests for refresh, revoke, password endpoints.
+Add integration tests with real database.
+Add minimum JWT secret length validation.
+29. CURRENT FUNCTIONALITY MATRIX
+Table
+Feature	Code Exists	Connected	Tested	Secure	Production Ready
+Login	✅ YES	❌ NO	✅ YES	⚠️ Partial	❌ NO
+Password verification	✅ YES	✅ YES	✅ YES	✅ YES	✅ YES
+Account lockout	✅ YES	✅ YES	✅ YES	✅ YES	✅ YES
+Access tokens	✅ YES	❌ NO	✅ YES	✅ YES	❌ NO
+Refresh tokens	✅ YES	❌ NO	✅ YES	✅ YES	❌ NO
+Token rotation	✅ YES	✅ YES	❌ NO	⚠️ Partial	⚠️ Partial
+Token revocation	✅ YES	✅ YES	❌ NO	✅ YES	⚠️ Partial
+Logout	❌ NO	❌ NO	❌ NO	—	❌ NO
+Password change	✅ YES	✅ YES	✅ YES	✅ YES	✅ YES
+Password reset	✅ YES	⚠️ Partial	✅ YES	⚠️ Partial	⚠️ Partial
+User lookup	✅ YES	❌ NO	✅ YES	—	❌ NO
+Organization context	✅ YES	✅ YES	✅ YES	⚠️ Partial	⚠️ Partial
+Security events	✅ YES	✅ YES	✅ YES	✅ YES	✅ YES
+Rate limiting	✅ YES	❌ NO	❌ NO	—	❌ NO
+API authentication	✅ YES	✅ YES	✅ YES	✅ YES	✅ YES
+Database migrations	❌ NO	—	❌ NO	—	❌ NO
+Deployment	❌ NO	—	❌ NO	—	❌ NO
+30. IMPLEMENTATION ROADMAP
+Phase 0 — Immediate Blockers
+Table
+Priority	Task	File(s)	Reason	Dependency	Verification
+P0	Implement User Service HTTP client	app/integrations/user_service.py	Login and password reset are non-functional	None	Unit test with responses/httpx mock
+P0	Connect TokenService to login endpoint	app/api/v1/auth.py, app/api/dependencies.py	Users cannot obtain tokens after login	User Service fix	API test asserts tokens in response
+P0	Create Alembic env and initial migration	migrations/env.py, migrations/versions/	Database schema cannot be created	None	CI runs alembic upgrade head on clean Postgres
+P0	Create deployment artifacts	pyproject.toml, Dockerfile, docker-compose.yml, .env.example	Service cannot be built or deployed	None	docker build succeeds; docker compose up healthy
+Phase 1 — Complete Core Authentication
+Table
+Priority	Task	File(s)	Reason	Dependency	Verification
+P1	Implement logout endpoint and service	app/api/v1/auth.py, app/services/logout_service.py	Users cannot terminate sessions	TokenService	API test for 200 + token revocation
+P1	Implement logout-all endpoint	app/api/v1/auth.py	Users cannot revoke all sessions	TokenService.revoke_all()	API test
+P1	Fix password reset request error handling	app/api/v1/password.py	Unhandled IntegrationError causes 500	User Service fix	API test returns 200 for unknown identifier
+Phase 2 — Security Hardening
+Table
+Priority	Task	File(s)	Reason	Dependency	Verification
+P2	Wire rate limiting to login/reset endpoints	app/security/rate_limiting.py, app/api/v1/auth.py, app/api/v1/password.py	Brute-force vulnerability	None	Load test returns 429
+P2	Pass Argon2 config to PasswordHasher	app/security/password_hashing.py	Config values are ignored	None	Assert hasher uses custom params
+P2	Add minimum JWT secret validation	app/core/config.py	Weak secrets possible in prod	None	Unit test rejects short secret
+P2	Add security event on token reuse	app/services/token_service.py	Stolen token probing is silent	None	Unit test asserts security event
+Phase 3 — Testing
+Table
+Priority	Task	File(s)	Reason	Dependency	Verification
+P3	API tests for token refresh	tests/api/test_token_refresh.py	Endpoint untested	None	Test 200, 401 expired, 401 revoked
+P3	API tests for token revoke	tests/api/test_token_revoke.py	Endpoint untested	None	Test 200, 401 already revoked
+P3	API tests for password endpoints	tests/api/test_password.py	Endpoints untested	None	Test change, reset request, reset confirm
+P3	Integration tests for login end-to-end	tests/integration/test_login.py	No real service flow tested	DB migrations	TestClient with real DB + mocked User Service
+Phase 4 — Database and Migration Hardening
+Table
+Priority	Task	File(s)	Reason	Dependency	None
+P4	Verify migration downgrade	migrations/versions/	Rollback safety	Initial migration	CI tests downgrade to base
+P4	Add migration check in CI	CI config	Prevent model/migration drift	None	alembic check passes
+Phase 5 — Deployment
+Table
+Priority	Task	File(s)	Reason	Dependency	Verification
+P5	Add health check with DB probe	app/main.py	Current health check does not verify DB connectivity	None	/health returns 503 if DB down
+P5	Add startup migration command	app/main.py or entrypoint script	Ensure schema is current on deploy	Alembic	Container starts and runs migrations
+P5	Add structured JSON logging	app/core/logging.py	Plain text logs are hard to aggregate	None	Logs are valid JSON
+Phase 6 — Documentation
+Table
+Priority	Task	File(s)	Reason	Dependency	Verification
+P6	Update IMPLEMENTATION_CHECKPOINT.md	docs/architecture/	Outdated claims about unimplemented features	All above	Document matches code
+P6	Write README.md	README.md	Developers cannot set up the service	All above	New dev can run docker compose up
+P6	Document environment variables	.env.example, docs/	Secrets and config are undocumented	All above	All required vars listed
+31. EXACT FILE CHANGE PLAN
+Files to MODIFY
+Table
+File	Changes Required	Priority
+app/api/v1/auth.py	Inject TokenService; call issue_tokens() on successful login; include tokens in LoginResponse	P0
+app/api/v1/password.py	Add except IntegrationError in request_password_reset to return uniform 200	P1
+app/api/dependencies.py	Add get_token_service injection for login endpoint	P0
+app/integrations/user_service.py	Replace stub with HTTP client to User Service (019); add timeout, retry, error mapping	P0
+app/security/password_hashing.py	Accept config params in PasswordHasher() or expose configurable instance	P2
+app/core/config.py	Add Field(min_length=32) to jwt_secret_key	P2
+app/services/token_service.py	Add security event on RevokedTokenError during refresh	P2
+app/main.py	Add CORS, exception handlers, health check DB probe	P5
+app/database/session.py	Remove redundant get_db() function	P4
+Files to CREATE
+Table
+File	Purpose	Priority
+migrations/env.py	Alembic environment with SQLAlchemy metadata	P0
+migrations/versions/001_initial.py	Initial migration for all 6 tables	P0
+app/services/logout_service.py	Logout orchestration (revoke token + event)	P1
+tests/api/test_token_refresh.py	API tests for refresh endpoint	P3
+tests/api/test_token_revoke.py	API tests for revoke endpoint	P3
+tests/api/test_password.py	API tests for password change/reset	P3
+tests/integration/test_login.py	End-to-end login with real DB	P3
+pyproject.toml	Project dependencies and metadata	P0
+Dockerfile	Multi-stage container build	P0
+docker-compose.yml	Local Postgres + app orchestration	P0
+.env.example	Documented environment variables	P0
+README.md	Setup and development guide	P6
+Files to DELETE
+Table
+File	Why	Priority
+app/api/v1/security.py	Empty router; no planned endpoints	P4
+app/services/security_service.py	Empty module; no callers	P4
+app/integrations/role_service.py	Empty; no callers	P4
+app/integrations/permission_service.py	Empty; no callers	P4
+app/integrations/session_service.py	Empty; no callers	P4
+app/schemas/security.py	Empty; no callers	P4
+Files to LEAVE UNCHANGED
+app/core/constants.py
+app/core/exceptions.py
+app/core/logging.py
+app/database/base.py
+app/database/dependencies.py
+app/models/* (all 6 models)
+app/repositories/* (all 5 repositories)
+app/schemas/auth.py
+app/schemas/password.py
+app/schemas/token.py
+app/security/authentication.py
+app/security/rate_limiting.py
+app/security/token_signing.py
+app/security/token_validation.py
+app/services/authentication_service.py
+app/services/login_service.py
+app/services/password_service.py
+app/services/token_service.py
+tests/api/test_auth_login.py
+tests/repositories/test_token_repository.py
+tests/security/test_token_signing.py
+tests/services/test_authentication_service.py
+tests/services/test_password_service.py
+32. DO NOT OVER-ENGINEER
+Required
+User Service HTTP client (REST, not gRPC)
+Token issuance on login
+Alembic migrations
+Docker/containerization
+API rate limiting (can start with in-memory slowapi; Redis is future)
+Recommended
+Structured JSON logging
+Logout endpoint
+API tests for all endpoints
+Health check DB probe
+Optional / Future
+Redis for distributed rate limiting (in-memory sufficient for single-instance start)
+Kafka for event streaming (DB events sufficient for audit)
+gRPC for internal service communication
+Kubernetes manifests
+Service mesh
+Complex session infrastructure (Session Service 022 is a separate repo)
+Role/Permission integration (020, 021 are separate repos)
+33. VERIFY CONTRADICTIONS
+Table
+Documentation/Claim	Actual Implementation	Impact	Fix
+"PostgreSQL database: Not yet implemented" (checkpoint §13)	database/session.py, database/base.py, all models exist	Docs are outdated; may confuse new devs	Update checkpoint to reflect completed DB layer
+"Password hashing implementation: Not yet implemented" (checkpoint §13)	password_hashing.py complete with Argon2	Docs are outdated	Update checkpoint
+"Login implementation: Not yet implemented" (checkpoint §13)	Login API, service, and repository exist	Partially true — login works but doesn't issue tokens	Clarify that login logic is done but token issuance is missing
+"SQLAlchemy configuration: Not yet implemented" (checkpoint §13)	config.py has database_url; session.py has engine	Docs are outdated	Update checkpoint
+LoginResponse schema has access_token/refresh_token fields	auth.py never populates them	Schema promises tokens that API never delivers	Fix auth.py to populate fields
+34. FINAL SCORE
+Table
+Category	Score	Rationale
+Architecture	78/100	Clean layers, good separation, but missing logout abstraction and rate-limiting wiring
+Authentication	45/100	Core logic is solid, but login is incomplete (no tokens) and User Service is a stub
+Token Security	82/100	Good JWT implementation; missing token binding and reuse alarms
+Password Security	75/100	Argon2 used correctly, but config ignored and no complexity validation
+Database	70/100	Excellent models, but zero migrations and no FKs (intentional for microservice)
+API	55/100	Endpoints exist but login is broken, logout missing, and reset request leaks 500s
+Integrations	15/100	Only User Service needed, but it's a hard stub. Others are empty placeholders
+Testing	60/100	Good service and security tests, but missing API tests for token and password endpoints
+Configuration	65/100	Good Pydantic settings, but missing validation and deployment config
+Deployment	5/100	No Dockerfile, no pyproject.toml, no docker-compose, no .env.example
+Documentation	40/100	Checkpoint is comprehensive but outdated; missing README and API docs
+Production Readiness	35/100	Cannot deploy; cannot create DB; cannot log in; cannot obtain tokens
+Overall Score: 52/100
+The codebase demonstrates strong architectural fundamentals but is not yet a functional authentication service. The gap between well-implemented internal logic and broken/unconnected external interfaces is the primary issue.
+35. FINAL VERDICT
+CURRENT STATE
+The BuildOS Authentication Service has a well-structured codebase with clean architecture, comprehensive SQLAlchemy models, robust JWT token signing/validation, correct password hashing, and solid domain logic for account lockout and event auditing. However, it is not yet an operational service. The login endpoint does not issue tokens, the User Service integration is a non-functional stub, database migrations are completely missing, and critical deployment artifacts do not exist.
+WHAT WORKS
+Pydantic schema validation for all endpoints
+FastAPI application factory and routing
+SQLAlchemy 2.0 models with proper indexes and defaults
+Repository pattern with correct unit-of-work behavior
+JWT access/refresh token creation and validation (cryptographically correct)
+Password hashing with Argon2
+Password change flow (authenticated)
+Password reset flow (service layer)
+Account lockout after failed attempts
+Authentication and security event recording
+Token refresh and revocation endpoints
+Current-user context extraction from Bearer tokens
+WHAT DOES NOT WORK
+Login does not return tokens (auth.py omits TokenService call)
+User identity resolution fails (user_service.py raises IntegrationError for all inputs)
+Password reset request throws 500 for all real identifiers due to unhandled IntegrationError
+Alembic is non-functional (migrations/env.py is empty)
+No API rate limiting (code exists but is unwired)
+WHAT IS MISSING
+Logout endpoint and service
+Token-reuse security events
+API tests for refresh, revoke, and password endpoints
+Database migrations
+Deployment artifacts (Dockerfile, pyproject.toml, docker-compose.yml, .env.example)
+README and updated architecture documentation
+User Service HTTP transport implementation
+Structured logging
+Health check with database connectivity probe
+SECURITY STATUS
+Not safe for production. While the cryptographic primitives (Argon2, JWT with issuer/audience validation) are sound, the service cannot authenticate users, has no brute-force protection at the API layer, and lacks the infrastructure to run securely in a production environment.
+PRODUCTION BLOCKERS (Priority Order)
+Implement User Service HTTP client
+Connect TokenService to login endpoint
+Create Alembic environment and initial migration
+Create deployment artifacts (Dockerfile, pyproject.toml, compose, .env.example)
+Wire API-level rate limiting
+NEXT 10 ENGINEERING TASKS
+Implement UserService HTTP client with httpx, timeout, retry, and error mapping to IntegrationError.
+Modify app/api/v1/auth.py to inject TokenService, call issue_tokens(), and return tokens in LoginResponse.
+Rewrite migrations/env.py to import Base.metadata and configure Alembic context.
+Generate initial Alembic migration for all 6 models and verify upgrade head on a clean database.
+Create pyproject.toml with FastAPI, SQLAlchemy, Alembic, Pydantic, PyJWT, Argon2, and pytest dependencies.
+Create Dockerfile (multi-stage) and docker-compose.yml with PostgreSQL service.
+Create .env.example documenting all required and optional environment variables.
+Fix app/api/v1/password.py to catch IntegrationError in request_password_reset and return uniform 200 OK.
+Implement app/services/logout_service.py and add POST /api/v1/auth/logout endpoint.
+Write API tests for token refresh, token revoke, and password endpoints.
+ESTIMATED PRODUCTION READINESS
+35%
+Calculation:
+Data layer (models, repos): ~90% complete
+Security layer (crypto, JWT): ~85% complete
+Service layer (logic): ~80% complete
+API layer (endpoints, wiring): ~45% complete
+Integration layer: ~10% complete
+Testing: ~50% complete
+Deployment: ~5% complete
+Documentation: ~30% complete
+Weighted average with heavy penalties for non-functional login and missing migrations/deployment: 35%.
+FINAL RECOMMENDATION
+"If we continue development from the current repository state, what should we implement first, second, third, and why?"
+First: User Service HTTP client (app/integrations/user_service.py)
+Why: This is the root cause of the login failure. Without it, no authentication flow can complete, and password reset is also broken. Everything else is moot if users cannot be resolved.
+Second: Connect token issuance to login (app/api/v1/auth.py + dependencies)
+Why: The domain logic for tokens is fully implemented but isolated. Connecting it unblocks the entire client authentication flow and allows the frontend to start integration work immediately.
+Third: Alembic migrations and deployment artifacts (migrations/, Dockerfile, docker-compose.yml, pyproject.toml)
+Why: The service cannot persist data or run in any environment without these. They are foundational for QA, staging, and production deployment. Once migrations exist, the repository tests against real PostgreSQL will also become reproducible for other developers.
+36. IMPORTANT EVIDENCE REQUIREMENT
+All significant findings above are backed by specific file references. Examples:
+Login missing tokens: app/api/v1/auth.py:49-55 returns LoginResponse(authenticated=True, user_id=user_id) without token fields.
+User Service stub: app/integrations/user_service.py:25-27 unconditionally raises IntegrationError.
+Empty Alembic env: migrations/env.py is a zero-byte file in the supplied content.
+Unhandled IntegrationError in reset: app/api/v1/password.py:66-70 has no except IntegrationError block.
+Argon2 defaults: app/security/password_hashing.py:12 uses PasswordHasher() with no arguments, while app/core/config.py:26-28 defines unused tuning parameters.
+37. MOST IMPORTANT QUESTION
+"If I stopped development today and deployed this exact repository, what would happen?"
+Table
+Step	Classification	Explanation
+1. Starting the application	FAILS / PARTIALLY WORKS	FastAPI app would start if dependencies are installed, but pyproject.toml is missing so dependency installation is undefined.
+2. Connecting to PostgreSQL	CANNOT VERIFY	database_url must be provided via environment. If provided, engine creation would succeed.
+3. Running migrations	FAILS	migrations/env.py is empty. alembic upgrade head would crash immediately.
+4. Registering a user	NOT IMPLEMENTED	No registration endpoint exists (intentionally out of scope).
+5. Logging in	FAILS	UserService.resolve_identifier() raises IntegrationError for every non-empty identifier. HTTP 503 for all login attempts.
+6. Receiving tokens	FAILS	Login fails before token issuance. Even if login succeeded, auth.py does not call TokenService.issue_tokens().
+7. Calling a protected endpoint	FAILS	No protected endpoints exist in the supplied API except password change, which requires a valid Bearer token. Since login cannot produce tokens, no client can reach it.
+8. Refreshing a token	FAILS	The refresh endpoint (/api/v1/token/refresh) is implemented and would work if given a valid refresh token, but no client can obtain one because login is broken.
+9. Revoking a token	FAILS	Same as refresh — endpoint works but unreachable without a token.
+10. Logging out	NOT IMPLEMENTED	No logout endpoint exists.
+11. Changing a password	FAILS	Endpoint requires Bearer token. Unreachable.
+12. Resetting a password	FAILS	request_password_reset raises unhandled IntegrationError (HTTP 500) for all real identifiers.
+13. Handling repeated failed logins	WORKS (domain only)	AuthenticationService correctly locks accounts after 5 failures, but this logic is never reached because the User Service stub blocks all logins.
+14. Handling an expired token	WORKS	validate_access_token and validate_refresh_token correctly raise ExpiredTokenError.
+15. Handling an invalid token	WORKS	Malformed tokens raise InvalidTokenError.
+16. Handling organization context	PARTIALLY WORKS	JWT claims support org context, but no validation occurs against an authority.
+17. Handling a compromised refresh token	PARTIALLY WORKS	Revoked tokens are rejected, but no security event is generated and token family invalidation is absent.
+Bottom line: If deployed today, the service would start its HTTP server, respond to health checks, and then fail every authentication request with either HTTP 500 or HTTP 503. No user could log in, no tokens would be issued, and no protected functionality would be accessible. The database tables would not exist. The service would be completely non-functional for its intended purpose.
+
+
+
+
+# BuildOS Authentication Service — Complete Technical Audit
+
+## Executive Summary
+
+The BuildOS Authentication Service repository contains a well‑architected, mostly complete *codebase* for authentication, token management, and password handling. However, the service is **not yet production‑ready** because several critical pieces are either missing or are placeholders:
+
+- **User Service integration is a stub** – no actual user resolution, making login impossible.
+- **No database migrations** – the schema cannot be created or evolved.
+- **No API‑level rate limiting** – the service is vulnerable to brute‑force attacks beyond account lockout.
+- **Logout is not implemented** – there is no way to invalidate sessions.
+- **Deployment assets are missing** – no Dockerfile, docker‑compose, or production configuration.
+- **Several security tests are absent** – coverage is insufficient for production confidence.
+
+The following audit details every component, identifies blockers, and provides a clear roadmap to reach production readiness.
+
+---
+
+## 1. Repository Inventory
+
+All supplied files are listed below, grouped by category.
+
+### A. Root / Project Configuration
+
+| File | Status | Notes |
+| ---- | ------ | ----- |
+| `pyproject.toml` | **NOT SUPPLIED** | Project dependencies and tool config are missing. |
+| `README.md` | **NOT SUPPLIED** | No documentation. |
+| `.env.example` | **NOT SUPPLIED** | No example environment file. |
+| `.gitignore` | **NOT SUPPLIED** | Not provided. |
+| `Dockerfile` | **NOT SUPPLIED** | Deployment not configured. |
+| `docker-compose.yml` | **NOT SUPPLIED** | Local development environment not defined. |
+| `alembic.ini` | **NOT SUPPLIED** | Alembic configuration is missing. |
+| `migrations/env.py` | **SUPPLIED (empty)** | File exists but contains no code; migrations cannot run. |
+| `migrations/versions/` | **NOT SUPPLIED** | No migration scripts. |
+
+### B. Application Code (`app/`)
+
+| File | Status | Notes |
+| ---- | ------ | ----- |
+| `app/__init__.py` | EMPTY | Package marker – fine. |
+| `app/main.py` | COMPLETE | FastAPI app created, router mounted, health check. |
+| `app/core/config.py` | COMPLETE | Pydantic settings with env vars. |
+| `app/core/constants.py` | COMPLETE | All event/constant definitions. |
+| `app/core/exceptions.py` | COMPLETE | Custom exception hierarchy. |
+| `app/core/logging.py` | COMPLETE | Basic logging config. |
+| `app/database/base.py` | COMPLETE | DeclarativeBase. |
+| `app/database/session.py` | COMPLETE | Engine and SessionLocal. |
+| `app/database/dependencies.py` | COMPLETE | get_db generator. |
+| `app/models/__init__.py` | COMPLETE | Exports all models. |
+| `app/models/auth_credential.py` | COMPLETE | Model with all fields. |
+| `app/models/auth_event.py` | COMPLETE | Authentication event model. |
+| `app/models/login_attempt.py` | COMPLETE | Login attempt model. |
+| `app/models/password_reset.py` | COMPLETE | Password reset model. |
+| `app/models/refresh_token.py` | COMPLETE | Refresh token model. |
+| `app/models/security_event.py` | COMPLETE | Security event model. |
+| `app/repositories/__init__.py` | COMPLETE | Exports repositories. |
+| `app/repositories/credential_repository.py` | COMPLETE | All CRUD for credentials. |
+| `app/repositories/event_repository.py` | COMPLETE | Creates auth/security events. |
+| `app/repositories/login_attempt_repository.py` | COMPLETE | Login attempt queries. |
+| `app/repositories/password_reset_repository.py` | COMPLETE | Reset token management. |
+| `app/repositories/token_repository.py` | COMPLETE | Refresh token CRUD with rotation. |
+| `app/schemas/auth.py` | COMPLETE | Login request/response schemas. |
+| `app/schemas/password.py` | COMPLETE | Password change/reset schemas. |
+| `app/schemas/security.py` | **SUPPLIED (empty)** | Empty file – likely placeholder. |
+| `app/schemas/token.py` | COMPLETE | Token refresh/revoke schemas and context. |
+| `app/security/authentication.py` | COMPLETE | Helper functions for credential state. |
+| `app/security/password_hashing.py` | COMPLETE | Argon2 hashing and verification. |
+| `app/security/rate_limiting.py` | COMPLETE | Account lockout logic. |
+| `app/security/token_signing.py` | COMPLETE | JWT creation. |
+| `app/security/token_validation.py` | COMPLETE | JWT validation. |
+| `app/services/authentication_service.py` | COMPLETE | Core authentication logic. |
+| `app/services/login_service.py` | COMPLETE | Orchestrates user resolution + auth. |
+| `app/services/logout_service.py` | **SUPPLIED (empty)** | No logout implementation. |
+| `app/services/password_service.py` | COMPLETE | Password change and reset flows. |
+| `app/services/security_service.py` | **SUPPLIED (empty)** | No security service implemented. |
+| `app/services/token_service.py` | COMPLETE | Token issuance, refresh, revocation. |
+| `app/integrations/user_service.py` | **STUB** | Resolve identifier raises NotImplementedError. |
+| `app/integrations/permission_service.py` | **EMPTY** | Not used. |
+| `app/integrations/role_service.py` | **EMPTY** | Not used. |
+| `app/integrations/session_service.py` | **EMPTY** | Not used. |
+| `app/api/__init__.py` | EMPTY | Package marker. |
+| `app/api/dependencies.py` | COMPLETE | DI for services, current user context. |
+| `app/api/v1/__init__.py` | EMPTY | Package marker. |
+| `app/api/v1/router.py` | COMPLETE | Registers all v1 routes. |
+| `app/api/v1/auth.py` | COMPLETE | `/login` endpoint. |
+| `app/api/v1/password.py` | COMPLETE | `/change`, `/reset/request`, `/reset/confirm`. |
+| `app/api/v1/token.py` | COMPLETE | `/refresh`, `/revoke`. |
+| `app/api/v1/security.py` | **EMPTY** | No security endpoints. |
+
+### C. Migrations
+
+| File | Status | Notes |
+| ---- | ------ | ----- |
+| `migrations/env.py` | EMPTY | No Alembic configuration. |
+| `migrations/versions/*` | **MISSING** | No migration scripts. |
+
+### D. Tests
+
+| File | Status | Notes |
+| ---- | ------ | ----- |
+| `tests/__init__.py` | EMPTY | – |
+| `tests/api/__init__.py` | EMPTY | – |
+| `tests/api/test_auth_login.py` | COMPLETE | Tests login endpoint with mocks. |
+| `tests/repositories/__init__.py` | EMPTY | – |
+| `tests/repositories/test_token_repository.py` | COMPLETE | Repository CRUD tests. |
+| `tests/security/__init__.py` | **MISSING** | – |
+| `tests/security/test_token_signing.py` | COMPLETE | JWT signing/validation tests. |
+| `tests/services/__init__.py` | EMPTY | – |
+| `tests/services/test_authentication_service.py` | COMPLETE | Authentication service tests. |
+| `tests/services/test_password_service.py` | COMPLETE | Password service tests. |
+
+**No integration tests**, **no end‑to‑end tests**, **no rate‑limiting tests**, **no refresh rotation tests**, **no revocation tests**, **no logout tests**.
+
+### E. Documentation
+
+| File | Status | Notes |
+| ---- | ------ | ----- |
+| `docs/architecture/IMPLEMENTATION_CHECKPOINT.md` | PARTIAL | High‑level plan, but lacks API docs, setup guide, etc. |
+
+---
+
+## 2. File‑by‑File Audit (Selected Critical Files)
+
+| # | File | Category | Size/Completeness | Status | What It Does | Problems | Dependencies | Action |
+|---|------|----------|-------------------|--------|--------------|----------|--------------|--------|
+| 1 | `app/integrations/user_service.py` | Integration | 26 lines | STUB | Resolves identifier to user ID | Raises `IntegrationError` unconditionally. No actual transport. | None | Implement actual User Service client (HTTP/gRPC). |
+| 2 | `migrations/env.py` | Migrations | Empty | BROKEN | Should configure Alembic | File exists but is empty – no env.py logic. | SQLAlchemy metadata | Write complete env.py. |
+| 3 | `migrations/versions/` | Migrations | Missing | MISSING | Migration scripts | No scripts exist; cannot create schema. | Models | Generate initial migration. |
+| 4 | `app/services/logout_service.py` | Services | Empty | MISSING | Should handle logout | No implementation. | TokenRepository, EventRepository | Implement logout (revoke tokens, record event). |
+| 5 | `app/services/security_service.py` | Services | Empty | PLACEHOLDER | Possibly for security events | No code. | Possibly unused | Determine necessity; likely can be removed or postponed. |
+| 6 | `app/api/v1/security.py` | API | Empty | PLACEHOLDER | Security‑related endpoints | No endpoints. | – | Remove or implement if needed. |
+| 7 | `app/schemas/security.py` | Schemas | Empty | PLACEHOLDER | Security schemas | No schemas. | – | Likely not needed; remove. |
+| 8 | `app/core/config.py` | Config | Complete | COMPLETE | All settings | Missing `LOG_LEVEL`, `CORS_ORIGINS`, etc. | – | Add missing production settings. |
+| 9 | `app/security/rate_limiting.py` | Security | Complete | COMPLETE | Account lockout logic | Only domain‑level lockout; no API‑level rate limiting. | Config | Add API‑level rate limiting (e.g., Redis). |
+| 10 | `app/api/dependencies.py` | DI | Complete | COMPLETE | Injects services, validates access token | Uses `bearer_scheme`; no refresh‑token validation. | Token validation | Good as is. |
+| 11 | `app/services/token_service.py` | Service | Complete | COMPLETE | Token lifecycle | Rotation is implemented; revoke logs event. | TokenRepository, EventRepository | Good. |
+| 12 | `app/services/authentication_service.py` | Service | Complete | COMPLETE | Authentication logic | Good, but no handling of expired lock cleanup before authentication? Actually it checks lock and if expired, lock is not considered locked; but does not clear it. That may be okay, but it doesn't reset the lock when it expires; the lock remains flagged but `is_credential_locked` will return False because locked_until <= now. However, if lock is expired, the credential still has `is_locked=True`; on successful login, `record_successful_login` resets `is_locked=False`. So it's fine. | CredentialRepository | Good. |
+| 13 | `app/api/v1/auth.py` | API | Complete | COMPLETE | Login endpoint | Returns only `authenticated` and `user_id`; does not return tokens. But tokens will be issued elsewhere? Actually the login endpoint does not issue tokens; it only returns `authenticated` and `user_id`. That is a design issue: after login, client expects tokens. This is a major missing piece. | LoginService | Add token issuance in login response. |
+| 14 | `app/api/v1/password.py` | API | Complete | COMPLETE | Password endpoints | Good, uses current user context for change. | PasswordService | Good. |
+| 15 | `app/api/v1/token.py` | API | Complete | COMPLETE | Refresh and revoke endpoints | Good. | TokenService | Good. |
+| 16 | `app/main.py` | Entry | Complete | COMPLETE | FastAPI app creation | Health check; includes router. | Config | Good. |
+
+---
+
+## 3. Architecture Review
+
+The service follows a clean separation of layers:
+
+- **API Layer** (`app/api/`): FastAPI routes, Pydantic schemas.
+- **Dependency Injection** (`app/api/dependencies.py`): Wires services, repositories, and database sessions.
+- **Service Layer** (`app/services/`): Orchestrates business logic.
+- **Repository Layer** (`app/repositories/`): Database access.
+- **Security Layer** (`app/security/`): Password hashing, JWT, rate‑limiting helpers.
+- **Integration Layer** (`app/integrations/`): External service clients (stubs).
+- **Database Layer** (`app/database/`, `app/models/`): SQLAlchemy models and session.
+
+**Strengths**:
+- Clear separation of concerns.
+- Repositories abstract database operations.
+- Services are focused and testable.
+- Dependency injection via FastAPI `Depends`.
+
+**Weaknesses**:
+- **Missing logout service** – no endpoint or logic to invalidate sessions.
+- **User Service integration is a stub** – the core authentication depends on it.
+- **No API‑level rate limiting** – only account lockout, but an attacker can still flood the endpoint.
+- **Over‑abstraction** in some places (e.g., `security_service`, `permission_service`, `role_service`, `session_service` are empty and likely unnecessary for initial release).
+- **No database migrations** – cannot deploy schema changes.
+
+**Architecture is appropriate for a microservice**, but missing key components.
+
+---
+
+## 4. Authentication Flow Audit
+
+### Login Flow Trace
+
+1. **Endpoint**: `POST /api/v1/auth/login` → `auth.login`
+2. **Payload**: `LoginRequest` with `identifier` and `password`.
+3. **Dependency**: `login_service` (from `get_login_service`).
+4. **LoginService.login**:
+   - Calls `user_service.resolve_identifier(identifier)` – **this raises `IntegrationError` because stub is not implemented**. **Login fails at this point.**
+   - If resolved, calls `authentication_service.authenticate(...)`.
+5. **AuthenticationService.authenticate**:
+   - Retrieves `AuthCredential` by `user_id`.
+   - Checks `is_active`, `is_locked` (with expiration).
+   - Verifies password via `verify_password`.
+   - On success: records successful login, creates `LoginAttempt` and `AuthEvent`.
+   - On failure: increments failed login count, may lock account if threshold exceeded, records events.
+6. **Result**: returns `AuthenticationResult` to `LoginService`, which returns `LoginResult`.
+7. **API response**: `LoginResponse` with `authenticated=True`, `user_id`, but **no tokens** are issued! The login endpoint only returns the authentication result; it does not generate access/refresh tokens. This is a critical missing feature: the service is supposed to issue tokens upon login.
+
+**Status**:
+- **Login flow is partially implemented** but fails due to User Service stub, and tokens are not issued.
+
+**Missing**: User Service integration, token issuance on login, logout, API rate limiting.
+
+---
+
+## 5. JWT / Token Security Audit
+
+- **Algorithm**: HS256, suitable for symmetric signing.
+- **Secret**: loaded from `JWT_SECRET_KEY` environment variable.
+- **Issuer/Audience**: configurable.
+- **Expiration**: 15 min for access, 30 days for refresh.
+- **Token type**: enforced in validation.
+- **Claims**: includes `sub` (user UUID), `context_type`, optionally `organization_id`, `membership_id`.
+- **Validation**: checks signature, expiration, issuer, audience, required claims, token type.
+
+**Security strengths**:
+- No sensitive user data in token.
+- Proper expiration and type checks.
+- Uses `jwt` library with secure defaults.
+- Refresh tokens are hashed before storage (SHA‑256).
+
+**Potential issues**:
+- **No algorithm confusion protection** – but using `HS256` and not accepting `none`; fine.
+- **No key rotation mechanism** – if secret leaks, all tokens compromised. This is acceptable initially.
+- **Refresh token rotation** is implemented and links to replacement; good.
+- **Stolen refresh token reuse**: The rotation mechanism revokes the old token and creates a new one. If an attacker presents a stolen token, the rotation will revoke it and issue a new token to the attacker, but the legitimate user’s token will be revoked. This is standard and secure. However, the implementation does not detect concurrent usage of the same token; it just revokes on first use. This is acceptable.
+
+**Verdict**: Token security is solid.
+
+---
+
+## 6. Refresh Token Audit
+
+- **Creation**: `TokenService.issue_tokens` creates access and refresh JWT, stores refresh token hash in database with expiration.
+- **Refresh**: `TokenService.refresh` validates the refresh token, checks stored token is active and not revoked, then issues new pair, revokes old token, records replacement link, logs event.
+- **Revocation**: `TokenService.revoke` revokes a single token, logs event. `revoke_all` exists but is not exposed via API.
+- **Concurrent refresh**: If two requests attempt to refresh the same token concurrently, the first will revoke it and create a new token; the second will find the token revoked and fail. This is correct and prevents replay.
+
+**Security**: The token family is properly managed. The old token is revoked and cannot be reused.
+
+**Missing**: No logout endpoint to revoke current token or all tokens. No endpoint to revoke all tokens for user (though `revoke_all` exists in service but not exposed).
+
+---
+
+## 7. Password Security Audit
+
+- **Hashing**: Argon2id with configurable parameters (time, memory, parallelism). Good.
+- **Verification**: Uses `argon2.PasswordHasher.verify`, handles exceptions gracefully.
+- **Rehash detection**: `needs_rehash` available but not used anywhere (should be used after successful login to update hash if needed). Currently not implemented.
+- **Password change**: Validates current password, hashes new, updates credential, revokes all tokens for the user (to force re‑login). Good.
+- **Password reset request**: Generates a cryptographically secure token, hashes it (SHA‑256) before storage, sets expiration. Does not leak account existence – returns same response for known/unknown identifiers. **Good**.
+- **Password reset confirmation**: Validates token hash, checks expiration and unused, updates password, revokes all tokens, marks token used. Good.
+- **Plaintext exposure**: No plaintext passwords or reset tokens are logged or returned in responses. Good.
+
+**Missing**: Rehash on login, and maybe stronger validation of password complexity (though schema has min length 8). Also, reset token length (48 bytes URL‑safe) is sufficient.
+
+**Verdict**: Password security is well implemented.
+
+---
+
+## 8. Account Lockout / Rate Limiting Audit
+
+- **Account lockout** is implemented in `AuthenticationService._handle_failed_password`:
+  - After `max_failed_login_attempts` (5) failed attempts, the credential is locked for `login_lockout_minutes` (15).
+  - Lock is cleared on successful login.
+  - `is_credential_locked` checks expiration.
+- **API‑level rate limiting** is **not implemented**. There is no per‑IP or per‑identifier throttling. An attacker could send millions of requests, causing excessive database load and potentially bypassing the lockout by using many identifiers.
+- **Rate limiting for password reset** is also missing – an attacker could request many resets.
+
+**Security concern**: High – the service is vulnerable to brute‑force and DoS.
+
+**Required**: Add API‑level rate limiting using a distributed store (e.g., Redis) or at least a simple in‑memory limiter (not sufficient for production). Also implement throttling for password reset requests.
+
+---
+
+## 9. Password Reset Enumeration Audit
+
+The password reset request endpoint (`/reset/request`) returns `{"requested": true}` regardless of whether the identifier exists. This prevents account enumeration based on response structure.
+
+However, if email delivery is implemented (not in this service), timing differences could still leak information. The service does not handle email sending – that is presumably done by the User Service or an external notification service. The current stub does not implement that.
+
+**Good**: No enumeration through the API response.
+
+---
+
+## 10. Logout Audit
+
+**Logout is completely missing**. There is no endpoint, service, or repository method to handle logout.
+
+**Recommended logout behavior**: Revoke the refresh token used in the request (if provided), optionally revoke all tokens for that user/context, record a logout event. The architecture suggests that the Session Service (repository 022) might handle session management, but the Auth Service should at least revoke the refresh token.
+
+**Action**: Implement logout endpoint that revokes the current refresh token (or all) and records event.
+
+---
+
+## 11. Database Audit
+
+**Models**: All six models are defined with appropriate fields, types, indexes, defaults, and timestamps. They appear complete.
+
+**Migrations**: No migration files exist. `migrations/env.py` is empty. The database schema cannot be created or updated.
+
+**Missing**: Alembic configuration (`alembic.ini`), migration environment, and at least an initial migration.
+
+**Action**: Set up Alembic, generate initial migration, and ensure `alembic upgrade head` works.
+
+---
+
+## 12. Alembic Audit
+
+- `migrations/env.py` is empty – no `run_migrations_online`/offline, no target metadata.
+- No `alembic.ini` provided.
+- No migration scripts.
+
+**Status**: Cannot run migrations. Production deployment impossible.
+
+---
+
+## 13. API Audit
+
+| Method | Endpoint | Implemented? | Service | Auth Required | Status | Problems |
+| ------ | -------- | ------------ | ------- | -------------- | ------ | -------- |
+| POST | `/api/v1/auth/login` | YES | LoginService | NO | PARTIAL | No token issuance; User Service stub. |
+| POST | `/api/v1/token/refresh` | YES | TokenService | NO (refresh token) | COMPLETE | None. |
+| POST | `/api/v1/token/revoke` | YES | TokenService | NO (refresh token) | COMPLETE | None. |
+| POST | `/api/v1/password/change` | YES | PasswordService | YES | COMPLETE | None. |
+| POST | `/api/v1/password/reset/request` | YES | PasswordService | NO | COMPLETE | No rate limiting. |
+| POST | `/api/v1/password/reset/confirm` | YES | PasswordService | NO | COMPLETE | None. |
+| GET | `/health` | YES | – | NO | COMPLETE | Good. |
+| (Logout) | – | NO | – | – | MISSING | No logout. |
+| (Security) | – | NO | – | – | PLACEHOLDER | Empty router. |
+
+**API issues**:
+- Login does not return tokens.
+- No logout.
+- No rate limiting.
+- No user registration (not expected, handled by User Service).
+- No endpoints for organization context management (maybe future).
+
+---
+
+## 14. Dependency Injection Audit
+
+`app/api/dependencies.py` defines:
+
+- `get_db` – database session.
+- `get_user_service` – returns `UserService` instance (stub).
+- `get_authentication_service` – builds service with repositories.
+- `get_login_service` – composes `LoginService`.
+- `get_password_service`, `get_token_service`.
+- `get_current_user_context` – validates access token, extracts user context from JWT.
+
+**Issues**:
+- `get_user_service` always returns a new instance; it could be a singleton but it's okay.
+- `get_login_service` calls `get_authentication_service(db)` which creates new repositories each time. This is fine.
+- `get_current_user_context` uses `HTTPBearer`, no caching; fine.
+- No dependency for `LogoutService` because it doesn't exist.
+
+**Overall**: DI is well structured and scoped correctly.
+
+---
+
+## 15. Integration Audit
+
+| Integration | Implementation | Status | Required? |
+| ----------- | -------------- | ------ | --------- |
+| User Service | `app/integrations/user_service.py` | STUB | YES – mandatory for login. |
+| Role Service | Empty | STUB | Not required initially. |
+| Permission Service | Empty | STUB | Not required initially. |
+| Session Service | Empty | STUB | Could be used for logout/session management, but logout can be handled by Auth Service alone. |
+
+**Critical**: User Service integration must be implemented (HTTP client to repository 019). Without it, authentication cannot proceed.
+
+---
+
+## 16. User / Organization Context Audit
+
+The service supports `PERSONAL` and `ORGANIZATION` contexts through `context_type`, `organization_id`, `membership_id` fields in models and JWT claims.
+
+- The login endpoint does not currently accept these context parameters, so only `PERSONAL` context is used.
+- The token endpoints (refresh/revoke) preserve context from the token payload.
+- The password change endpoint uses the context from the token and revokes tokens for that specific context, but it could be expanded.
+- **Authorization enforcement**: The service does not validate that the user has the right to act in an organization context – it trusts the token claims. This is acceptable if the token issuance was properly authorized by the User/Role services.
+- **Risk**: If a user can obtain an organization token without proper authorization (e.g., by forging claims), they could escalate privileges. However, token signing prevents forgery. The trust boundary is: the Auth Service issues tokens only after verifying the user's membership via the User Service (which currently is a stub). Once implemented, the User Service must confirm membership.
+
+**Verdict**: The context model is well designed, but the implementation of organization authentication is incomplete due to missing User Service integration.
+
+---
+
+## 17. Security Event Audit
+
+| Event | Created? | Where? | Correct Context? | Missing? |
+| ----- | -------- | ------ | ---------------- | -------- |
+| `LOGIN_SUCCESS` | YES | `AuthenticationService.authenticate` | Yes, includes context. | – |
+| `LOGIN_FAILURE` | YES | `AuthenticationService._record_failed_attempt` and `_handle_failed_password` | Yes. | – |
+| `LOGOUT` | NO | – | – | Missing. |
+| `TOKEN_REFRESH` | YES | `TokenService.refresh` | Yes. | – |
+| `TOKEN_REVOKED` | YES | `TokenService.revoke` | Yes. | – |
+| `PASSWORD_CHANGED` | YES | `PasswordService.change_password` | Yes. | – |
+| `PASSWORD_RESET_REQUESTED` | YES | `PasswordService.request_reset` | Yes. | – |
+| `PASSWORD_RESET_COMPLETED` | YES | `PasswordService.confirm_reset` | Yes. | – |
+| `ACCOUNT_LOCKED` | YES | `AuthenticationService._handle_failed_password` | Yes. | – |
+| `ACCOUNT_UNLOCKED` | NO | – | – | Not implemented (occurs on successful login, but not logged). |
+| Suspicious auth | NO | – | – | Not implemented. |
+
+**Good**: Most key events are logged. Missing logout and account unlock events.
+
+---
+
+## 18. Test Coverage Audit
+
+| Feature | Unit Test | Integration Test | API Test | Security Test | Missing Coverage |
+| ------- | --------- | ---------------- | -------- | ------------- | ---------------- |
+| **Login** | Partially (auth service, login service) | No | Yes (API mock) | No | Real integration; token issuance; lockout; rate limiting. |
+| **Password verification** | Yes (in auth service tests) | No | No | No | – |
+| **Account lockout** | Yes (auth service tests) | No | No | No | End‑to‑end; lock expiration. |
+| **Access tokens** | Yes (token signing tests) | No | No | No | – |
+| **Refresh tokens** | Yes (repository tests, token signing) | No | No | No | Rotation; revocation; concurrent usage. |
+| **Token rotation** | Yes (token service logic?) Actually no direct test for `TokenService.refresh` – only repository tests. | No | No | No | Missing. |
+| **Token revocation** | Yes (repository tests) but not service tests for `TokenService.revoke`. | No | No | No | Missing. |
+| **Logout** | No | No | No | No | Entirely missing. |
+| **Password change** | Yes (password service tests) | No | No | No | API integration. |
+| **Password reset** | Yes (password service tests) | No | No | No | End‑to‑end; rate limiting. |
+| **User lookup** | No (stub) | No | No | No | Needs implementation. |
+| **Organization context** | No | No | No | No | Needs tests for context handling. |
+| **Security events** | Implicitly tested (events creation in service tests) | No | No | No | – |
+| **Rate limiting** | No | No | No | No | Entirely missing. |
+| **API authentication** | Yes (API test with mock) | No | Yes | No | – |
+| **Database migrations** | No | No | No | No | Not applicable. |
+| **Deployment** | No | No | No | No | – |
+
+**Coverage is moderate for unit tests but lacks integration and end‑to‑end tests. Critical flows (token rotation, revocation, logout, rate limiting) are not adequately tested.**
+
+---
+
+## 19. Code Quality Audit
+
+- **Type hints**: Used throughout, good.
+- **Pylint/Ruff**: Not run, but code appears clean (except some `# pylint: disable` for too‑many‑arguments).
+- **Unused imports**: Not observed.
+- **Duplication**: Some duplication in event creation but acceptable.
+- **Complexity**: Services are moderately complex but manageable.
+- **Exception handling**: Custom exceptions; good.
+- **Logging**: Basic, could be improved (structured logging).
+- **Secrets**: No secrets in code.
+
+**Verdict**: Code quality is high; maintainability is good.
+
+---
+
+## 20. Configuration Audit
+
+- **Environment variables** required: `DATABASE_URL`, `JWT_SECRET_KEY`, others have defaults.
+- **Security**: Secret must be set; no default.
+- **Production readiness**: No CORS configuration, no logging level config, no debug flag properly used? `debug` is available.
+- **Password hashing parameters**: Configurable, good.
+- **Lockout parameters**: Configurable, good.
+
+**Issues**:
+- No `LOG_LEVEL` environment variable.
+- No `CORS_ORIGINS` setting – would need to be added.
+- No configuration for external services (User Service URL, etc.).
+
+---
+
+## 21. Deployment Audit
+
+- **Dockerfile**: Not supplied.
+- **docker‑compose.yml**: Not supplied.
+- **Startup**: `uvicorn app.main:app` would work if dependencies are installed, but migrations must be run.
+- **Health check**: `/health` exists.
+- **Production server**: FastAPI with Uvicorn is fine.
+- **Database**: Must exist and be migrated.
+
+**Missing**:
+- Dockerization.
+- Environment example.
+- Production startup script (e.g., with gunicorn/uvicorn).
+- Migration run on startup.
+
+**Verdict**: Cannot be deployed without these assets.
+
+---
+
+## 22. Documentation Audit
+
+- **Implementation checkpoint** provides architecture and plan but is not user‑facing.
+- No API documentation (OpenAPI is auto‑generated but not written).
+- No setup guide.
+- No security model documentation.
+
+**Status**: Partial, insufficient for operations.
+
+---
+
+## 23. Empty / Placeholder File Audit
+
+| File | Why It Exists | Current State | Is It Needed? | Recommendation |
+| ---- | ------------- | ------------- | ------------- | -------------- |
+| `app/integrations/permission_service.py` | Future permission integration | Empty | Not needed initially | Remove or postpone. |
+| `app/integrations/role_service.py` | Future role integration | Empty | Not needed initially | Remove or postpone. |
+| `app/integrations/session_service.py` | Future session management | Empty | Could be needed for logout/session invalidation | Keep as placeholder if session service will be used. |
+| `app/services/logout_service.py` | Expected logout logic | Empty | Required | Implement. |
+| `app/services/security_service.py` | Possibly for security aggregation | Empty | Not required | Remove. |
+| `app/api/v1/security.py` | Security endpoints | Empty | Not required | Remove. |
+| `app/schemas/security.py` | Security schemas | Empty | Not required | Remove. |
+| `app/__init__.py`, etc. | Package markers | Empty | Yes | Keep. |
+
+---
+
+## 24. Dead / Unused Code
+
+- `security_service` is imported nowhere.
+- `permission_service`, `role_service`, `session_service` are not used.
+- `security.py` router is included but has no endpoints.
+- `schemas/security.py` not used.
+
+These can be removed to reduce clutter.
+
+---
+
+## 25. Security Risk Rating
+
+| Severity | Finding | File | Evidence | Impact | Recommended Fix |
+| -------- | ------- | ---- | -------- | ------ | --------------- |
+| **CRITICAL** | User Service integration is a stub – login always fails. | `app/integrations/user_service.py` | `raise IntegrationError` | Service cannot authenticate users. | Implement actual User Service client. |
+| **CRITICAL** | No database migrations – cannot create schema. | `migrations/` | Empty env.py, no versions. | Service cannot start with database. | Set up Alembic, generate initial migration. |
+| **HIGH** | No API‑level rate limiting. | Entire service | No throttling on login/reset endpoints. | Brute‑force and DoS risk. | Implement rate limiting (e.g., Redis). |
+| **HIGH** | Login does not issue tokens. | `app/api/v1/auth.py` | Response lacks tokens. | After login, client has no token to use. | Modify login to call `TokenService.issue_tokens` and include tokens in response. |
+| **HIGH** | No logout functionality. | `app/services/logout_service.py` | Empty. | Users cannot invalidate sessions. | Implement logout endpoint. |
+| **MEDIUM** | Missing rehash on login. | `app/services/authentication_service.py` | `needs_rehash` not called. | Users with old hashes may suffer performance or security issues. | Call `needs_rehash` after successful password verification and update if needed. |
+| **MEDIUM** | Organization context validation absent. | `app/services/authentication_service.py` | No check that user has membership. | Potential privilege escalation if token claims forged (but signing prevents). | Ensure User Service validates membership before issuing organization tokens. |
+| **LOW** | Missing account unlock event. | `app/security/authentication.py` | No event on unlock. | Audit trail incomplete. | Add event when lock expires on successful login. |
+| **LOW** | `DEBUG` mode may leak info in production. | `app/core/config.py` | `debug` defaults False, but if set True, need caution. | Could expose internal errors. | Ensure debug is False in production. |
+
+---
+
+## 26. Production Blockers
+
+1. **User Service integration is a stub** – the service cannot authenticate any user.  
+   - *File*: `app/integrations/user_service.py`  
+   - *Why*: `resolve_identifier` raises `IntegrationError`.  
+   - *Fix*: Implement HTTP client to repository 019 User Service.  
+   - *Testing*: Integration test with mock/stubbed User Service.
+
+2. **No database migrations** – the database schema cannot be created.  
+   - *File*: `migrations/`  
+   - *Why*: No `alembic.ini`, empty `env.py`, no version scripts.  
+   - *Fix*: Initialize Alembic, generate initial migration from models.  
+   - *Testing*: Run `alembic upgrade head` against a clean PostgreSQL.
+
+3. **Login does not return tokens** – authentication flow incomplete.  
+   - *File*: `app/api/v1/auth.py`  
+   - *Why*: Response lacks access/refresh tokens.  
+   - *Fix*: After successful authentication, call `TokenService.issue_tokens` and include in `LoginResponse`.  
+   - *Testing*: API test verifying tokens are returned.
+
+4. **No API‑level rate limiting** – vulnerable to brute force.  
+   - *File*: Need to add middleware or dependency.  
+   - *Fix*: Implement rate limiting (e.g., with Redis) for login and reset endpoints.  
+   - *Testing*: Stress test.
+
+5. **No logout** – sessions cannot be terminated.  
+   - *File*: `app/services/logout_service.py`  
+   - *Fix*: Implement logout endpoint that revokes the refresh token and records event.  
+   - *Testing*: API test.
+
+6. **Missing deployment assets** – no Dockerfile, compose, env example.  
+   - *Files*: Not supplied.  
+   - *Fix*: Create Dockerfile, docker‑compose.yml, .env.example.  
+   - *Testing*: Build and run locally.
+
+---
+
+## 27. Non‑Blocking Improvements
+
+- Add CORS configuration.
+- Structured logging (JSON).
+- Integration with Session Service (022) if needed.
+- Enhance test coverage for edge cases.
+- Add API documentation (OpenAPI annotations, README).
+- Add rehash on login.
+- Add account unlock event.
+- Remove unused placeholder files.
+
+---
+
+## 28. Current Functionality Matrix
+
+| Feature | Code Exists | Connected | Tested | Secure | Production Ready |
+| ------- | ----------- | --------- | ------ | ------ | ---------------- |
+| Login | YES | PARTIAL (stub) | PARTIAL | NO (no tokens, no rate limit) | NO |
+| Password verification | YES | YES | YES | YES | YES |
+| Account lockout | YES | YES | YES | YES | YES |
+| Access tokens | YES | YES (via token endpoints) | YES | YES | YES |
+| Refresh tokens | YES | YES | PARTIAL | YES | YES |
+| Token rotation | YES | YES | NO | YES | PARTIAL (untested) |
+| Token revocation | YES | YES | NO | YES | PARTIAL (untested) |
+| Logout | NO | NO | NO | NO | NO |
+| Password change | YES | YES | YES | YES | YES |
+| Password reset | YES | YES | YES | YES | YES (no rate limit) |
+| User lookup | STUB | NO | NO | NO | NO |
+| Organization context | PARTIAL (models) | PARTIAL | NO | PARTIAL | NO |
+| Security events | YES | YES | YES | YES | YES |
+| Rate limiting (API) | NO | NO | NO | NO | NO |
+| API authentication | YES | YES | YES | YES | YES |
+| Database migrations | NO | NO | NO | NO | NO |
+| Deployment | NO | NO | NO | NO | NO |
+
+---
+
+## 29. Implementation Roadmap
+
+### Phase 0 — Immediate Blockers (Must fix first)
+
+| Priority | Task | File(s) | Reason | Dependency | Verification |
+| -------- | ---- | ------- | ------ | ---------- | ------------- |
+| 1 | Implement User Service integration | `app/integrations/user_service.py` | Login impossible without it. | User Service API | Unit/integration test. |
+| 2 | Set up Alembic and initial migration | `alembic.ini`, `migrations/env.py`, generate migration | Database schema needed. | Models | Run `alembic upgrade head`. |
+| 3 | Add token issuance to login response | `app/api/v1/auth.py` | Login must return tokens. | TokenService | API test. |
+| 4 | Implement logout endpoint | `app/services/logout_service.py`, `app/api/v1/auth.py` or new route | Session termination required. | TokenRepository, EventRepository | API test. |
+| 5 | Add API‑level rate limiting | Middleware or dependency | Brute‑force protection. | Redis (optional) | Load test. |
+
+### Phase 1 — Complete Core Authentication
+
+| Priority | Task | File(s) | Reason | Verification |
+| -------- | ---- | ------- | ------ | ------------ |
+| 6 | Add rehash on login | `app/services/authentication_service.py` | Keep passwords up to date. | Unit test. |
+| 7 | Add account unlock event | `app/services/authentication_service.py` | Audit completeness. | Test event creation. |
+| 8 | Expose `revoke_all` endpoint (optional) | `app/api/v1/token.py` | Allow bulk revocation. | API test. |
+
+### Phase 2 — Security Hardening
+
+| Priority | Task | File(s) | Reason | Verification |
+| -------- | ---- | ------- | ------ | ------------ |
+| 9 | Configure CORS | `app/main.py` | Secure cross‑origin requests. | Test with browser. |
+| 10 | Add structured logging | `app/core/logging.py` | Operational visibility. | Log inspection. |
+| 11 | Validate organization context with User Service | `app/services/authentication_service.py` or login service | Prevent privilege escalation. | Integration test. |
+
+### Phase 3 — Testing
+
+| Priority | Task | File(s) | Reason | Verification |
+| -------- | ---- | ------- | ------ | ------------ |
+| 12 | Add integration tests for login flow | `tests/integration/` | Verify full flow with test DB. | CI. |
+| 13 | Add tests for token refresh rotation | `tests/services/test_token_service.py` | Ensure rotation works. | Unit tests. |
+| 14 | Add tests for revocation | `tests/services/test_token_service.py` | Ensure revoke works. | Unit tests. |
+| 15 | Add tests for rate limiting | `tests/security/test_rate_limiting.py` | Ensure throttling works. | Unit/integration. |
+
+### Phase 4 — Deployment
+
+| Priority | Task | File(s) | Reason | Verification |
+| -------- | ---- | ------- | ------ | ------------ |
+| 16 | Create Dockerfile | `Dockerfile` | Containerize service. | Build and run. |
+| 17 | Create docker‑compose.yml | `docker‑compose.yml` | Local stack with PostgreSQL. | Run stack. |
+| 18 | Create .env.example | `.env.example` | Configuration reference. | - |
+| 19 | Add production server (gunicorn) | optional | Production readiness. | Run with workers. |
+
+### Phase 5 — Documentation
+
+| Priority | Task | File(s) | Reason | Verification |
+| -------- | ---- | ------- | ------ | ------------ |
+| 20 | Write README with setup and API overview | `README.md` | User onboarding. | Review. |
+| 21 | Document API endpoints (OpenAPI annotations) | `app/api/v1/*.py` | API documentation. | Check `/docs`. |
+| 22 | Update architecture doc | `docs/` | Technical reference. | Review. |
+
+---
+
+## 30. Exact File Change Plan
+
+### Files to MODIFY
+
+| File | Changes Required | Priority |
+| ---- | ---------------- | -------- |
+| `app/integrations/user_service.py` | Implement actual HTTP client to User Service. | 1 |
+| `app/api/v1/auth.py` | After successful login, issue tokens and include in response. | 3 |
+| `app/services/authentication_service.py` | Add rehash check after successful password verification. | 6 |
+| `app/services/authentication_service.py` | Emit account unlock event when lock expires and login succeeds. | 7 |
+| `app/core/config.py` | Add `LOG_LEVEL`, `CORS_ORIGINS`, `USER_SERVICE_URL` etc. | 9 |
+| `app/main.py` | Add CORS middleware. | 9 |
+| `app/core/logging.py` | Add JSON formatter option. | 10 |
+
+### Files to CREATE
+
+| File | Purpose | Priority |
+| ---- | ------- | -------- |
+| `alembic.ini` | Alembic configuration. | 2 |
+| `migrations/env.py` | Complete migration environment. | 2 |
+| `migrations/versions/initial.py` | Initial migration from models. | 2 |
+| `app/services/logout_service.py` | Logout logic (revoke tokens, record event). | 4 |
+| `app/api/v1/logout.py` or add to `auth.py` | Logout endpoint. | 4 |
+| `app/security/rate_limiter.py` (or middleware) | API‑level rate limiting. | 5 |
+| `Dockerfile` | Container build. | 16 |
+| `docker‑compose.yml` | Local development stack. | 17 |
+| `.env.example` | Environment variable reference. | 18 |
+| `README.md` | Project documentation. | 20 |
+| `tests/integration/test_login_flow.py` | Integration tests. | 12 |
+| `tests/services/test_token_service.py` | Tests for refresh/revoke. | 13,14 |
+| `tests/security/test_rate_limiting.py` | Rate limiting tests. | 15 |
+
+### Files to DELETE
+
+| File | Why | Priority |
+| ---- | --- | -------- |
+| `app/integrations/permission_service.py` | Not needed; remove. | Low |
+| `app/integrations/role_service.py` | Not needed; remove. | Low |
+| `app/services/security_service.py` | Not needed; remove. | Low |
+| `app/api/v1/security.py` | Empty router; remove. | Low |
+| `app/schemas/security.py` | Empty; remove. | Low |
+
+(These can be removed later; they don't block deployment.)
+
+### Files to LEAVE UNCHANGED
+
+- All models, repositories, schemas (except maybe adding fields).
+- `app/security/token_signing.py`, `token_validation.py` – they are correct.
+- `app/security/password_hashing.py` – correct.
+- `app/repositories/*` – all correct.
+- `app/database/*` – correct.
+- `app/api/dependencies.py` – correct (except maybe adding logout dependency).
+- `app/core/constants.py`, `exceptions.py` – fine.
+- `tests/` – can stay as is; we will add more.
+
+---
+
+## 31. Contradictions Found
+
+| Documentation/Claim | Actual Implementation | Impact | Fix |
+| ------------------- | --------------------- | ------ | --- |
+| Checkpoint says "TASK 02 – Database Foundation" is next, but migrations are not set up. | No migrations. | Blocking. | Set up Alembic. |
+| Checkpoint says "Login implementation" after migrations, but login endpoint exists. | Login endpoint exists but User Service stub breaks it. | Misleading. | Implement User Service. |
+| Architecture says tokens are issued on login, but login response has optional token fields that are always None. | No token issuance. | Broken flow. | Issue tokens in login. |
+| Documentation mentions logout but no implementation. | No logout. | Missing feature. | Implement logout. |
+
+---
+
+## 32. Final Score
+
+| Category | Score | Comments |
+| -------- | ----- | -------- |
+| Architecture | 90/100 | Clean separation, good design. |
+| Authentication | 40/100 | Core logic exists but incomplete (stub, no tokens). |
+| Token Security | 85/100 | Solid implementation, but missing rehash and logout. |
+| Password Security | 90/100 | Argon2, reset flow good. |
+| Database | 10/100 | Models exist, but no migrations. |
+| API | 50/100 | Endpoints defined, but login incomplete and missing logout. |
+| Integrations | 5/100 | Only stub for User Service. |
+| Testing | 55/100 | Good unit tests, no integration or end‑to‑end. |
+| Configuration | 60/100 | Missing production settings. |
+| Deployment | 0/100 | No Docker, compose, migrations. |
+| Documentation | 30/100 | Only checkpoint doc. |
+| **Production Readiness** | **15/100** | Not deployable without critical fixes. |
+
+**Overall Score**: 42/100 (weighted average, heavily penalized for blockers).
+
+---
+
+## 33. Final Verdict
+
+### CURRENT STATE
+
+The BuildOS Authentication Service has a strong architectural foundation, complete models, repositories, and most of the business logic for authentication, token management, and password operations. However, several critical pieces are missing or broken:
+
+- **User Service integration is a stub** – the service cannot resolve identifiers, so login always fails.
+- **Database migrations are not set up** – cannot create the schema.
+- **Login endpoint does not issue tokens** – clients get authentication success but no tokens to use.
+- **No logout functionality**.
+- **No API‑level rate limiting**.
+- **No deployment assets**.
+
+### WHAT WORKS
+
+- Core authentication logic (password verification, account lockout, event logging) is fully implemented and tested.
+- Token signing and validation are correct.
+- Password change and reset flows are fully implemented.
+- Repository layer is complete and tested.
+- FastAPI application structure is clean.
+
+### WHAT DOES NOT WORK
+
+- Login cannot succeed due to User Service stub.
+- Login does not return tokens.
+- No logout.
+- No rate limiting.
+- Cannot deploy (no migrations, no Docker).
+
+### WHAT IS MISSING
+
+- User Service integration.
+- Alembic migrations.
+- Logout endpoint.
+- API rate limiting.
+- Deployment configuration.
+- Documentation and testing for missing components.
+
+### SECURITY STATUS
+
+The service is **not safe for production** due to the login failure, missing rate limiting, and lack of logout. If deployed, attackers could brute‑force (though account lockout limits per‑user, they can still exhaust resources) and users cannot terminate sessions. The token security itself is sound.
+
+### PRODUCTION BLOCKERS
+
+1. **User Service integration is a stub**.
+2. **No database migrations**.
+3. **Login does not return tokens**.
+4. **No API‑level rate limiting**.
+5. **No logout**.
+6. **No deployment assets**.
+
+### NEXT 10 ENGINEERING TASKS
+
+1. Implement User Service HTTP client (`app/integrations/user_service.py`) to resolve identifier via API call to repository 019.
+2. Set up Alembic: create `alembic.ini`, write `migrations/env.py`, generate initial migration from models.
+3. Modify login endpoint to issue tokens via `TokenService` and include them in response.
+4. Implement logout endpoint: create `LogoutService` and route to revoke current refresh token.
+5. Add API‑level rate limiting (e.g., using `slowapi` with Redis) for login and reset endpoints.
+6. Add rehash on login (call `needs_rehash` and update if needed).
+7. Create Dockerfile and docker‑compose.yml for local development and deployment.
+8. Write integration tests for the complete login and token flow.
+9. Add CORS configuration and production logging.
+10. Update README with setup instructions, environment variables, and API overview.
+
+### ESTIMATED PRODUCTION READINESS
+
+**15%** – The service has a solid core but lacks the essential components to function in production.
+
+### FINAL RECOMMENDATION
+
+**"If we continue development from the current repository state, what should we implement first, second, third, and why?"**
+
+1. **First, implement User Service integration** – without it, the service cannot authenticate any user, making all other work useless.
+2. **Second, set up database migrations** – to ensure the schema exists and can be evolved.
+3. **Third, add token issuance to login** – so clients can actually use the tokens.
+4. **Fourth, implement logout** – essential for user session management.
+5. **Fifth, add rate limiting** – to protect against brute force and DoS.
+
+After these five, the service will be minimally functional and can be deployed in a controlled environment. Further hardening and testing can follow.
