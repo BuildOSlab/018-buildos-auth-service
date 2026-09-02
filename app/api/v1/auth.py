@@ -170,7 +170,7 @@ def logout(
     logout_service: LogoutServiceDependency,
 ) -> TokenRevokeResponse:
     """
-    Log out the current session by revoking its refresh token.
+    Log out the current session by revoking its refresh token
     """
 
     try:
