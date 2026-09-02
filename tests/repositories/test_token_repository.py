@@ -104,10 +104,7 @@ def create_token(
     token = repository.create(
         user_id=options.user_id or uuid4(),
         token_hash=options.token_hash or f"hash-{uuid4()}",
-        expires_at=(
-            options.expires_at
-            or datetime.now(UTC) + timedelta(days=30)
-        ),
+        expires_at=(options.expires_at or datetime.now(UTC) + timedelta(days=30)),
         context_type=options.context_type,
         organization_id=options.organization_id,
         membership_id=options.membership_id,

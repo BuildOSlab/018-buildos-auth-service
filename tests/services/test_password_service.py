@@ -150,10 +150,7 @@ def test_change_password_success(monkeypatch: pytest.MonkeyPatch) -> None:
         password_hash: str,
     ) -> bool:
         """Verify the expected test password."""
-        return (
-            password == "OldPassword123"
-            and password_hash == "old-hash"
-        )
+        return password == "OldPassword123" and password_hash == "old-hash"
 
     def hash_password(password: str) -> str:
         """Return a deterministic test password hash."""
@@ -390,9 +387,7 @@ def test_request_reset_known_identifier(
 
     create_call = password_reset_repository.create.call_args.kwargs
     assert create_call["user_id"] == user_id
-    assert create_call["token_hash"] == (
-        PasswordService.hash_reset_token("raw-reset-token")
-    )
+    assert create_call["token_hash"] == (PasswordService.hash_reset_token("raw-reset-token"))
 
     event_repository.create_security_event.assert_called_once()
 

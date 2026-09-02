@@ -20,9 +20,7 @@ class CredentialRepository:
 
     def get_by_user_id(self, user_id: UUID) -> AuthCredential | None:
         """Return authentication credentials for a user."""
-        stmt = select(AuthCredential).where(
-            AuthCredential.user_id == user_id
-        )
+        stmt = select(AuthCredential).where(AuthCredential.user_id == user_id)
         return self.db.scalar(stmt)
 
     def create(

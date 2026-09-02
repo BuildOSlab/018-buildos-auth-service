@@ -114,9 +114,7 @@ class PasswordService:
             raise InvalidCredentialsError("Invalid credentials.")
 
         if current_password == new_password:
-            raise InvalidCredentialsError(
-                "New password must differ from the current password."
-            )
+            raise InvalidCredentialsError("New password must differ from the current password.")
 
         updated_credential = self.credential_repository.update_password(
             credential,
@@ -243,7 +241,7 @@ class PasswordService:
 
         self.token_repository.revoke_all_for_user(
             user_id=reset.user_id,
-            revoked_at=current_time, 
+            revoked_at=current_time,
             context_type=CONTEXT_PERSONAL,
             organization_id=None,
             membership_id=None,

@@ -5,7 +5,7 @@ Application Entry Point
 
 from fastapi import FastAPI
 
-from app.api.v1.router import router as api_router
+from app.api.v1 import auth, password, security, token
 from app.core.config import settings
 from app.core.logging import configure_logging
 
@@ -27,8 +27,27 @@ def create_application() -> FastAPI:
     )
 
     application.include_router(
-        api_router,
-        prefix="/api",
+        auth.router,
+        prefix="/api/v1/auth",
+        tags=["authentication"],
+    )
+
+    application.include_router(
+        password.router,
+        prefix="/api/v1/password",
+        tags=["password"],
+    )
+
+    application.include_router(
+        security.router,
+        prefix="/api/v1/security",
+        tags=["security"],
+    )
+
+    application.include_router(
+        token.router,
+        prefix="/api/v1/token",
+        tags=["token"],
     )
 
     @application.get(

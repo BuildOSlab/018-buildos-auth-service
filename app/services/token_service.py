@@ -305,6 +305,7 @@ class TokenService:
             organization_id=organization_id,
             membership_id=membership_id,
         )
+
     def _get_replacement_token_id(
         self,
         refresh_token: str,

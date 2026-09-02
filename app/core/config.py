@@ -43,6 +43,12 @@ class Settings(BaseSettings):
     # Password reset
     password_reset_expire_minutes: int = 30
 
+    # User Service integration
+    user_service_url: str = "http://127.0.0.1:8001"
+    user_service_api_key: str
+    user_service_id: str = "buildos-auth-service"
+    user_service_timeout: float = 5.0
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

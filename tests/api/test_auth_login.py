@@ -8,11 +8,12 @@ from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
-from app.api.dependencies import get_login_service
+from app.api.dependencies import get_login_service, get_token_service
 from app.core.exceptions import IntegrationError, InvalidCredentialsError
 from app.main import app
 from app.services.authentication_service import AuthenticationResult
 from app.services.login_service import LoginResult
+from app.services.token_service import TokenPair
 
 
 def build_authenticated_result() -> LoginResult:
@@ -27,12 +28,27 @@ def build_authenticated_result() -> LoginResult:
     )
 
 
+def build_token_pair() -> TokenPair:
+    """Build a deterministic token pair for API integration tests."""
+    return TokenPair(
+        access_token="test-access-token",
+        refresh_token="test-refresh-token",
+        token_type="bearer",
+    )
+
+
 def test_login_success() -> None:
     login_service = Mock()
+    token_service = Mock()
+
     result = build_authenticated_result()
+    token_pair = build_token_pair()
+
     login_service.login.return_value = result
+    token_service.issue_tokens.return_value = token_pair
 
     app.dependency_overrides[get_login_service] = lambda: login_service
+    app.dependency_overrides[get_token_service] = lambda: token_service
 
     try:
         client = TestClient(app)
@@ -51,13 +67,20 @@ def test_login_success() -> None:
 
         assert body["authenticated"] is True
         assert body["user_id"] == str(result.authentication.user_id)
-        assert body["access_token"] is None
-        assert body["refresh_token"] is None
+        assert body["access_token"] == "test-access-token"
+        assert body["refresh_token"] == "test-refresh-token"
         assert body["token_type"] == "bearer"
 
         login_service.login.assert_called_once_with(
             identifier="user@example.com",
             password="correct-password",
+            ip_address="testclient",
+            user_agent="testclient",
+        )
+
+        token_service.issue_tokens.assert_called_once_with(
+            user_id=result.authentication.user_id,
+            context_type="PERSONAL",
             ip_address="testclient",
             user_agent="testclient",
         )
@@ -68,7 +91,7 @@ def test_login_success() -> None:
 def test_login_invalid_credentials_returns_401() -> None:
     login_service = Mock()
     login_service.login.side_effect = InvalidCredentialsError(
-        "Invalid credentials."
+        "Invalid credentials.",
     )
 
     app.dependency_overrides[get_login_service] = lambda: login_service
@@ -95,7 +118,7 @@ def test_login_invalid_credentials_returns_401() -> None:
 def test_login_user_service_unavailable_returns_503() -> None:
     login_service = Mock()
     login_service.login.side_effect = IntegrationError(
-        "User Service integration transport is not configured."
+        "User Service integration transport is not configured.",
     )
 
     app.dependency_overrides[get_login_service] = lambda: login_service

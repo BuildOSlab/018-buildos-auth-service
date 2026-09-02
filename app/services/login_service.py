@@ -60,9 +60,7 @@ class LoginService:
         )
 
         if user_id is None:
-            raise InvalidCredentialsError(
-                "Invalid credentials."
-            )
+            raise InvalidCredentialsError("Invalid credentials.")
 
         authentication = self.authentication_service.authenticate(
             user_id=user_id,
@@ -76,11 +74,8 @@ class LoginService:
         )
 
         if not authentication.authenticated:
-            raise InvalidCredentialsError(
-                "Invalid credentials."
-            )
+            raise InvalidCredentialsError("Invalid credentials.")
 
         return LoginResult(
             authentication=authentication,
         )
-    

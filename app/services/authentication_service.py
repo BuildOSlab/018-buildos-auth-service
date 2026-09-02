@@ -147,9 +147,7 @@ class AuthenticationService:
             )
 
             failure_reason = (
-                "ACCOUNT_LOCKED"
-                if updated_credential.is_locked
-                else "INVALID_CREDENTIALS"
+                "ACCOUNT_LOCKED" if updated_credential.is_locked else "INVALID_CREDENTIALS"
             )
 
             return AuthenticationResult(

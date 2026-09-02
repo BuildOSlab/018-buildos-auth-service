@@ -45,9 +45,7 @@ class PasswordResetRepository:
         token_hash: str,
     ) -> PasswordReset | None:
         """Return a password reset record matching the token hash."""
-        stmt = select(PasswordReset).where(
-            PasswordReset.token_hash == token_hash
-        )
+        stmt = select(PasswordReset).where(PasswordReset.token_hash == token_hash)
         return self.db.scalar(stmt)
 
     def get_active_by_token_hash(

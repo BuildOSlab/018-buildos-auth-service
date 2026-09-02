@@ -28,9 +28,7 @@ def create_access_token(
     """
     settings = get_settings()
     issued_at = now or datetime.now(UTC)
-    expires_at = issued_at + timedelta(
-        minutes=settings.access_token_expire_minutes
-    )
+    expires_at = issued_at + timedelta(minutes=settings.access_token_expire_minutes)
 
     payload: dict[str, object] = {
         "sub": str(user_id),
@@ -72,9 +70,7 @@ def create_refresh_token(
     """
     settings = get_settings()
     issued_at = now or datetime.now(UTC)
-    expires_at = issued_at + timedelta(
-        days=settings.refresh_token_expire_days
-    )
+    expires_at = issued_at + timedelta(days=settings.refresh_token_expire_days)
 
     payload: dict[str, object] = {
         "sub": str(user_id),

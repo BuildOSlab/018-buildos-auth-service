@@ -23,7 +23,9 @@ from app.schemas.token import TokenUserContext
 from app.security.token_validation import validate_access_token
 from app.services.authentication_service import AuthenticationService
 from app.services.login_service import LoginService
+from app.services.logout_service import LogoutService
 from app.services.password_service import PasswordService
+from app.services.registration_service import RegistrationService
 from app.services.token_service import TokenService
 
 DatabaseSession = Annotated[Session, Depends(get_db)]
@@ -115,14 +117,30 @@ TokenServiceDependency = Annotated[
 ]
 
 
+def get_logout_service(
+    db: DatabaseSession,
+) -> LogoutService:
+    """
+    Build the logout orchestration service.
+    """
+
+    return LogoutService(
+        token_service=get_token_service(db),
+    )
+
+
+LogoutServiceDependency = Annotated[
+    LogoutService,
+    Depends(get_logout_service),
+]
+
+
 bearer_scheme = HTTPBearer()
 
 
 def get_current_user_context(
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),  # noqa: B008
 ) -> TokenUserContext:
-
-    
     """
     Resolve the authenticated user context from an access token.
     """
@@ -226,17 +244,40 @@ def _optional_uuid_claim(
         ) from exc
 
 
+def get_registration_service(
+    db: DatabaseSession,
+) -> RegistrationService:
+    """Build the registration orchestration service."""
+
+    return RegistrationService(
+        user_service=get_user_service(),
+        credential_repository=CredentialRepository(db),
+        event_repository=EventRepository(db),
+        token_service=get_token_service(db),
+    )
+
+
+RegistrationServiceDependency = Annotated[
+    RegistrationService,
+    Depends(get_registration_service),
+]
+
+
 __all__ = [
     "CurrentUserContextDependency",
     "DatabaseSession",
     "LoginServiceDependency",
+    "LogoutServiceDependency",
     "PasswordServiceDependency",
+    "RegistrationServiceDependency",
     "TokenServiceDependency",
     "get_authentication_service",
     "get_current_user_context",
     "get_db",
     "get_login_service",
+    "get_logout_service",
     "get_password_service",
+    "get_registration_service",
     "get_token_service",
     "get_user_service",
 ]

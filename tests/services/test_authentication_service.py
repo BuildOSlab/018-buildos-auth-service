@@ -227,6 +227,7 @@ def test_fifth_failed_attempt_locks_account() -> None:
     assert event["event_type"] == "ACCOUNT_LOCKED"
     assert event["severity"] == "warning"
 
+
 def test_locked_account_cannot_authenticate() -> None:
     user_id = uuid4()
     now = datetime.now(UTC)
@@ -276,6 +277,7 @@ def test_locked_account_cannot_authenticate() -> None:
     event = event_repository.create_auth_event.call_args.kwargs
 
     assert event["event_type"] == "LOGIN_FAILURE"
+
 
 def test_expired_lock_allows_authentication() -> None:
     user_id = uuid4()

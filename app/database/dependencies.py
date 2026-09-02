@@ -14,12 +14,17 @@ def get_db() -> Generator[Session, None, None]:
     """
     Provide a database session for an API request.
 
-    The session is always closed when the request finishes.
+    Commit on successful request completion and rollback on failure.
     """
 
     db = SessionLocal()
 
     try:
         yield db
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     finally:
         db.close()
+        

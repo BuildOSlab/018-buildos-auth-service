@@ -73,9 +73,4 @@ class PasswordReset(Base):
     )
 
     def __repr__(self) -> str:
-        return (
-            f"<PasswordReset "
-            f"id={self.id!s} "
-            f"user_id={self.user_id!s} "
-            f"is_used={self.is_used}>"
-        )
+        return f"<PasswordReset id={self.id!s} user_id={self.user_id!s} is_used={self.is_used}>"
