@@ -3,13 +3,14 @@ BuildOS Auth Service
 Authentication API
 """
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from app.api.dependencies import (
     LoginServiceDependency,
     LogoutServiceDependency,
     RegistrationServiceDependency,
     TokenServiceDependency,
+    get_user_service,
 )
 from app.core.exceptions import (
     AuthenticationError,
@@ -19,6 +20,7 @@ from app.core.exceptions import (
     RevokedTokenError,
     UserAlreadyExistsError,
 )
+from app.integrations.user_service import UserService
 from app.schemas.auth import (
     LoginRequest,
     LoginResponse,
@@ -208,3 +210,43 @@ def logout(
     return TokenRevokeResponse(
         revoked=True,
     )
+
+
+@router.get(
+    "/check-availability",
+    status_code=status.HTTP_200_OK,
+)
+def check_availability(
+    email: str | None = None,
+    username: str | None = None,
+    user_service: UserService = Depends(get_user_service),
+) -> dict[str, bool]:
+    """
+    Check if an email or username is already registered in the User Service.
+
+    This endpoint is used by the frontend to perform real-time validation
+    during registration, reducing duplicate submission errors.
+    """
+    if not email and not username:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Either email or username must be provided.",
+        )
+
+    user_id = None
+    try:
+        if email:
+            user_id = user_service.resolve_identifier(identifier=email)
+        if not user_id and username:
+            user_id = user_service.resolve_identifier(identifier=username)
+    except IntegrationError as exc:
+        # If the User Service is unavailable, we cannot determine availability.
+        # Return a 503 so the frontend can treat it as "unknown" and not block
+        # the user from submitting, or show a warning.
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="User identity service is temporarily unavailable.",
+        ) from exc
+
+    available = user_id is None
+    return {"available": available}
