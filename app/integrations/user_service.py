@@ -11,7 +11,7 @@ from uuid import UUID
 import httpx
 
 from app.core.config import get_settings
-from app.core.exceptions import IntegrationError
+from app.core.exceptions import IntegrationError, UserAlreadyExistsError
 
 
 @dataclass(frozen=True)
@@ -263,6 +263,11 @@ class UserService:
             raise IntegrationError(
                 "User Service transport failed.",
             ) from exc
+
+        if response.status_code == 409:
+            raise UserAlreadyExistsError(
+                "An account with this email already exists.",
+            )
 
         if response.status_code not in {200, 201}:
             raise IntegrationError(

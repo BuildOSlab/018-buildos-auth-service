@@ -54,3 +54,7 @@ class PasswordResetError(PasswordError):
 
 class IntegrationError(AuthServiceError):
     """Raised when an external service integration fails."""
+
+
+class UserAlreadyExistsError(AuthServiceError):
+    """Raised when a user identity already exists."""

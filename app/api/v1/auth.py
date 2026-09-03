@@ -17,6 +17,7 @@ from app.core.exceptions import (
     IntegrationError,
     InvalidTokenError,
     RevokedTokenError,
+    UserAlreadyExistsError,
 )
 from app.schemas.auth import (
     LoginRequest,
@@ -69,6 +70,11 @@ def register(
             ),
             user_agent=request.headers.get("user-agent"),
         )
+    except UserAlreadyExistsError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
     except IntegrationError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

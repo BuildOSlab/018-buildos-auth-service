@@ -13,7 +13,7 @@ from uuid import UUID
 import httpx
 import pytest
 
-from app.core.exceptions import IntegrationError
+from app.core.exceptions import IntegrationError, UserAlreadyExistsError
 from app.integrations.user_service import UserService
 
 TEST_USER_ID = UUID("82298225-a2af-4691-bc47-1514be4ceb88")
@@ -202,8 +202,8 @@ def test_create_user_success() -> None:
     assert result.status == "pending"
 
 
-def test_create_user_failure() -> None:
-    """Map non-success creation responses to IntegrationError."""
+def test_create_user_conflict() -> None:
+    """Map an existing identity to UserAlreadyExistsError."""
     def handler(_: httpx.Request) -> httpx.Response:
         return httpx.Response(
             409,
@@ -211,8 +211,8 @@ def test_create_user_failure() -> None:
         )
 
     with make_service(make_transport(handler)) as service, pytest.raises(
-        IntegrationError,
-        match="failed to create the user",
+        UserAlreadyExistsError,
+        match="account with this email already exists",
     ):
         service.create_user(
             idempotency_key="registration-test-002",
