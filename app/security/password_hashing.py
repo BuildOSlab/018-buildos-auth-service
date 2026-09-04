@@ -4,9 +4,21 @@ Password Hashing Security
 """
 
 from argon2 import PasswordHasher
-from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
+from argon2.exceptions import (
+    InvalidHashError,
+    VerificationError,
+    VerifyMismatchError,
+)
 
-_password_hasher = PasswordHasher()
+from app.core.config import get_settings
+
+settings = get_settings()
+
+_password_hasher = PasswordHasher(
+    time_cost=settings.password_hash_time_cost,
+    memory_cost=settings.password_hash_memory_cost,
+    parallelism=settings.password_hash_parallelism,
+)
 
 
 def hash_password(password: str) -> str:

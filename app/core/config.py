@@ -40,13 +40,13 @@ class Settings(BaseSettings):
     max_failed_login_attempts: int = 5
     login_lockout_minutes: int = 15
     login_rate_limit_window_minutes: int = 15
-    internal_api_key: str = "change-me-in-production"
+    internal_api_key: str
 
     # Password reset
     password_reset_expire_minutes: int = 30
 
     # User Service integration
-    user_service_url: str = "http://127.0.0.1:8001"
+    user_service_url: str
     user_service_api_key: str
     user_service_id: str = "buildos-auth-service"
     user_service_timeout: float = 5.0
