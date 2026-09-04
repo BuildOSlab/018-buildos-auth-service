@@ -2,6 +2,7 @@
 BuildOS Auth Service
 Authentication Credential Model
 """
+# pylint: disable=duplicate-code
 
 from datetime import datetime
 from uuid import UUID, uuid4
@@ -14,6 +15,7 @@ from app.database.base import Base
 
 
 class AuthCredential(Base):
+    # pylint: disable=too-few-public-methods
     """
     Authentication credentials belonging to a canonical BuildOS user.
 

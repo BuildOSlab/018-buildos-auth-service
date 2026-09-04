@@ -45,6 +45,7 @@ class AuthenticationResult:
 
 
 class AuthenticationService:
+    # pylint: disable=too-few-public-methods
     """
     Orchestrates authentication against the authentication repository layer.
 
@@ -63,7 +64,7 @@ class AuthenticationService:
         self.login_attempt_repository = login_attempt_repository
         self.event_repository = event_repository
 
-    def authenticate(
+    def authenticate( # pylint: disable=too-many-arguments
         self,
         *,
         user_id: UUID,

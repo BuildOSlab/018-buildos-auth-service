@@ -2,6 +2,7 @@
 BuildOS Auth Service
 Refresh Token Model
 """
+# pylint: disable=duplicate-code
 
 from datetime import datetime
 from uuid import UUID, uuid4
@@ -14,6 +15,7 @@ from app.database.base import Base
 
 
 class RefreshToken(Base):
+    # pylint: disable=too-few-public-methods
     """
     Stores refresh-token state.
 
@@ -93,7 +95,7 @@ class RefreshToken(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
-        server_default=func.now(),
+        server_default=func.now(), # pylint: disable=not-callable
     )
 
     last_used_at: Mapped[datetime | None] = mapped_column(

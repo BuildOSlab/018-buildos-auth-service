@@ -15,10 +15,18 @@ from app.api.dependencies import (
 from app.core.exceptions import (
     AuthenticationError,
     ExpiredTokenError,
+    IdempotencyConflictError,
     IntegrationError,
     InvalidTokenError,
     RevokedTokenError,
     UserAlreadyExistsError,
+    ValidationError,
+)
+from app.core.rate_limit import (
+    AVAILABILITY_RATE,
+    LOGIN_RATE,
+    REGISTER_RATE,
+    limiter,
 )
 from app.integrations.user_service import UserService
 from app.schemas.auth import (
@@ -37,6 +45,7 @@ router = APIRouter()
     response_model=RegisterResponse,
     status_code=status.HTTP_201_CREATED,
 )
+@limiter.limit(REGISTER_RATE)
 def register(
     payload: RegisterRequest,
     request: Request,
@@ -77,6 +86,16 @@ def register(
             status_code=status.HTTP_409_CONFLICT,
             detail=str(exc),
         ) from exc
+    except IdempotencyConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
     except IntegrationError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -98,9 +117,10 @@ def register(
     response_model=LoginResponse,
     status_code=status.HTTP_200_OK,
 )
+@limiter.limit(LOGIN_RATE)
 def login(
     payload: LoginRequest,
-    request: Request,
+    request: Request,  # pylint: disable=unused-argument
     login_service: LoginServiceDependency,
     token_service: TokenServiceDependency,
 ) -> LoginResponse:
@@ -174,7 +194,7 @@ def login(
 )
 def logout(
     payload: TokenRefreshRequest,
-    request: Request,
+    request: Request,  # pylint: disable=unused-argument
     logout_service: LogoutServiceDependency,
 ) -> TokenRevokeResponse:
     """
@@ -216,10 +236,12 @@ def logout(
     "/check-availability",
     status_code=status.HTTP_200_OK,
 )
+@limiter.limit(AVAILABILITY_RATE)
 def check_availability(
+    request: Request,  # pylint: disable=unused-argument
     email: str | None = None,
     username: str | None = None,
-    user_service: UserService = Depends(get_user_service),
+    user_service: UserService = Depends(get_user_service),  # noqa: B008
 ) -> dict[str, bool]:
     """
     Check if an email or username is already registered in the User Service.
@@ -234,11 +256,18 @@ def check_availability(
         )
 
     user_id = None
+
     try:
         if email:
-            user_id = user_service.resolve_identifier(identifier=email)
+            user_id = user_service.resolve_identifier(
+                identifier=email,
+            )
+
         if not user_id and username:
-            user_id = user_service.resolve_identifier(identifier=username)
+            user_id = user_service.resolve_identifier(
+                identifier=username,
+            )
+
     except IntegrationError as exc:
         # If the User Service is unavailable, we cannot determine availability.
         # Return a 503 so the frontend can treat it as "unknown" and not block
@@ -249,4 +278,5 @@ def check_availability(
         ) from exc
 
     available = user_id is None
+
     return {"available": available}

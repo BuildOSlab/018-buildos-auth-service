@@ -6,10 +6,11 @@ API Dependencies
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import Depends, HTTPException, status
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi import Depends, Header, HTTPException, Security, status
+from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.core.constants import CONTEXT_PERSONAL
 from app.core.exceptions import ExpiredTokenError, InvalidTokenError
 from app.database.dependencies import get_db
@@ -31,12 +32,71 @@ from app.services.token_service import TokenService
 DatabaseSession = Annotated[Session, Depends(get_db)]
 
 
+# ------------------------------------------------------------------
+# Internal service authentication
+# ------------------------------------------------------------------
+
+internal_api_key_header = APIKeyHeader(
+    name="Authorization",
+    auto_error=False,
+)
+
+
+async def verify_internal_service(
+    api_key: str | None = Security(internal_api_key_header),
+    service_id: str | None = Header(
+        default=None,
+        alias="X-Service-ID",
+    ),
+) -> bool:
+    """
+    Verify service-to-service authentication for internal endpoints.
+
+    Internal requests must provide:
+    - Authorization: Bearer <internal API key>
+    - X-Service-ID: calling service identifier
+    """
+    if not api_key:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing API key.",
+        )
+
+    if not service_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing service identity.",
+        )
+
+    if api_key.startswith("Bearer "):
+        api_key = api_key.removeprefix("Bearer ").strip()
+
+    settings = get_settings()
+
+    if api_key != settings.internal_api_key:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid API key.",
+        )
+
+    return True
+
+
+# ------------------------------------------------------------------
+# User Service
+# ------------------------------------------------------------------
+
+
 def get_user_service() -> UserService:
     """
     Provide the canonical User Service integration.
     """
-
     return UserService()
+
+
+# ------------------------------------------------------------------
+# Authentication Service
+# ------------------------------------------------------------------
 
 
 def get_authentication_service(
@@ -45,7 +105,6 @@ def get_authentication_service(
     """
     Build the authentication domain service with its repositories.
     """
-
     credential_repository = CredentialRepository(db)
     login_attempt_repository = LoginAttemptRepository(db)
     event_repository = EventRepository(db)
@@ -57,13 +116,17 @@ def get_authentication_service(
     )
 
 
+# ------------------------------------------------------------------
+# Login Service
+# ------------------------------------------------------------------
+
+
 def get_login_service(
     db: DatabaseSession,
 ) -> LoginService:
     """
     Build the login orchestration service.
     """
-
     return LoginService(
         user_service=get_user_service(),
         authentication_service=get_authentication_service(db),
@@ -76,13 +139,17 @@ LoginServiceDependency = Annotated[
 ]
 
 
+# ------------------------------------------------------------------
+# Password Service
+# ------------------------------------------------------------------
+
+
 def get_password_service(
     db: DatabaseSession,
 ) -> PasswordService:
     """
     Build the password-management service with its repositories.
     """
-
     return PasswordService(
         user_service=get_user_service(),
         credential_repository=CredentialRepository(db),
@@ -98,13 +165,17 @@ PasswordServiceDependency = Annotated[
 ]
 
 
+# ------------------------------------------------------------------
+# Token Service
+# ------------------------------------------------------------------
+
+
 def get_token_service(
     db: DatabaseSession,
 ) -> TokenService:
     """
     Build the token lifecycle service with its repositories.
     """
-
     return TokenService(
         token_repository=TokenRepository(db),
         event_repository=EventRepository(db),
@@ -117,13 +188,17 @@ TokenServiceDependency = Annotated[
 ]
 
 
+# ------------------------------------------------------------------
+# Logout Service
+# ------------------------------------------------------------------
+
+
 def get_logout_service(
     db: DatabaseSession,
 ) -> LogoutService:
     """
     Build the logout orchestration service.
     """
-
     return LogoutService(
         token_service=get_token_service(db),
     )
@@ -135,16 +210,21 @@ LogoutServiceDependency = Annotated[
 ]
 
 
+# ------------------------------------------------------------------
+# Current User
+# ------------------------------------------------------------------
+
 bearer_scheme = HTTPBearer()
 
 
 def get_current_user_context(
-    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),  # noqa: B008
+    credentials: HTTPAuthorizationCredentials = Depends(  # noqa: B008
+        bearer_scheme,
+    ),
 ) -> TokenUserContext:
     """
     Resolve the authenticated user context from an access token.
     """
-
     try:
         payload = validate_access_token(credentials.credentials)
     except ExpiredTokenError as exc:
@@ -221,7 +301,6 @@ def _optional_uuid_claim(
     """
     Parse an optional UUID claim from an access-token payload.
     """
-
     value = payload.get(claim_name)
 
     if value is None:
@@ -244,11 +323,15 @@ def _optional_uuid_claim(
         ) from exc
 
 
+# ------------------------------------------------------------------
+# Registration Service
+# ------------------------------------------------------------------
+
+
 def get_registration_service(
     db: DatabaseSession,
 ) -> RegistrationService:
     """Build the registration orchestration service."""
-
     return RegistrationService(
         user_service=get_user_service(),
         credential_repository=CredentialRepository(db),
@@ -280,4 +363,5 @@ __all__ = [
     "get_registration_service",
     "get_token_service",
     "get_user_service",
+    "verify_internal_service",
 ]

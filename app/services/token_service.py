@@ -2,6 +2,7 @@
 BuildOS Auth Service
 Token Lifecycle Service
 """
+# pylint: disable=duplicate-code
 
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -63,15 +64,15 @@ class TokenService:
         """
         return sha256(token.encode("utf-8")).hexdigest()
 
-    def issue_tokens(
+    def issue_tokens( # pylint: disable=too-many-arguments
         self,
         *,
         user_id: UUID,
         context_type: str = CONTEXT_PERSONAL,
         organization_id: UUID | None = None,
         membership_id: UUID | None = None,
-        ip_address: str | None = None,
-        user_agent: str | None = None,
+        ip_address: str | None = None, # pylint: disable=unused-argument
+        user_agent: str | None = None, # pylint: disable=unused-argument
         now: datetime | None = None,
     ) -> TokenPair:
         """
@@ -114,7 +115,7 @@ class TokenService:
             refresh_token=refresh_token,
         )
 
-    def refresh(
+    def refresh( # pylint: disable=too-many-locals
         self,
         *,
         refresh_token: str,

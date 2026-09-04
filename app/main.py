@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from app.api.v1 import auth, password, security, token
 from app.core.config import settings
 from app.core.logging import configure_logging
+from app.core.rate_limit import setup_rate_limiting
 
 
 def create_application() -> FastAPI:
@@ -68,3 +69,4 @@ def create_application() -> FastAPI:
 
 
 app = create_application()
+setup_rate_limiting(app)

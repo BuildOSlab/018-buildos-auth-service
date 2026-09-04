@@ -2,6 +2,7 @@
 BuildOS Auth Service
 Authentication Event Model
 """
+# pylint: disable=duplicate-code
 
 from datetime import datetime
 from uuid import UUID, uuid4
@@ -14,6 +15,7 @@ from app.database.base import Base
 
 
 class AuthEvent(Base):
+    # pylint: disable=too-few-public-methods
     """
     Records authentication lifecycle events.
 
@@ -85,7 +87,7 @@ class AuthEvent(Base):
     occurred_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
-        server_default=func.now(),
+        server_default=func.now(), # pylint: disable=not-callable
     )
 
     def __repr__(self) -> str:

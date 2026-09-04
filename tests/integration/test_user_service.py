@@ -7,6 +7,7 @@ process to be running.
 """
 
 import json
+from collections.abc import Callable
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -20,7 +21,7 @@ TEST_USER_ID = UUID("82298225-a2af-4691-bc47-1514be4ceb88")
 
 
 def make_transport(
-    handler,
+    handler: Callable[[httpx.Request], httpx.Response],
 ) -> httpx.MockTransport:
     """Build an HTTP mock transport from a request handler."""
     return httpx.MockTransport(handler)
@@ -41,6 +42,7 @@ def make_service(
 
 def test_resolve_identifier_success() -> None:
     """Resolve an identifier into the canonical user UUID."""
+
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.method == "POST"
         assert request.url.path == "/internal/v1/users/resolve"
@@ -81,8 +83,10 @@ def test_resolve_identifier_classifies_types(
     expected_type: str,
 ) -> None:
     """Send the correct identity type to the User Service."""
+
     def handler(request: httpx.Request) -> httpx.Response:
         payload = json.loads(request.content)
+
         assert payload["identifier"] == identifier
         assert payload["type"] == expected_type
 
@@ -106,6 +110,7 @@ def test_resolve_identifier_not_found_returns_none(
     status_code: int,
 ) -> None:
     """Map missing or deleted users to None."""
+
     def handler(_: httpx.Request) -> httpx.Response:
         return httpx.Response(status_code)
 
@@ -119,6 +124,7 @@ def test_resolve_identifier_not_found_returns_none(
 
 def test_resolve_identifier_transport_error() -> None:
     """Map transport failures to IntegrationError."""
+
     def handler(_: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("connection failed")
 
@@ -133,8 +139,12 @@ def test_resolve_identifier_transport_error() -> None:
 
 def test_resolve_identifier_unexpected_status() -> None:
     """Reject unexpected User Service responses."""
+
     def handler(_: httpx.Request) -> httpx.Response:
-        return httpx.Response(500, json={"detail": "server error"})
+        return httpx.Response(
+            500,
+            json={"detail": "server error"},
+        )
 
     with make_service(make_transport(handler)) as service, pytest.raises(
         IntegrationError,
@@ -147,6 +157,7 @@ def test_resolve_identifier_unexpected_status() -> None:
 
 def test_resolve_identifier_malformed_response() -> None:
     """Reject responses without a valid user UUID."""
+
     def handler(_: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
@@ -175,6 +186,7 @@ def test_create_user_success() -> None:
         assert request.headers["Idempotency-Key"] == "registration-test-001"
 
         payload = json.loads(request.content)
+
         assert payload["email"] == "new@example.com"
         assert payload["first_name"] == "Test"
         assert payload["last_name"] == "User"
@@ -204,10 +216,15 @@ def test_create_user_success() -> None:
 
 def test_create_user_conflict() -> None:
     """Map an existing identity to UserAlreadyExistsError."""
+
     def handler(_: httpx.Request) -> httpx.Response:
         return httpx.Response(
             409,
-            json={"detail": {"code": "IDENTITY_ALREADY_EXISTS"}},
+            json={
+                "detail": {
+                    "code": "IDENTITY_ALREADY_EXISTS",
+                },
+            },
         )
 
     with make_service(make_transport(handler)) as service, pytest.raises(
@@ -222,6 +239,7 @@ def test_create_user_conflict() -> None:
 
 def test_create_user_malformed_response() -> None:
     """Reject malformed user creation responses."""
+
     def handler(_: httpx.Request) -> httpx.Response:
         return httpx.Response(
             201,
@@ -277,6 +295,7 @@ def test_get_user_status_success() -> None:
 
 def test_get_user_status_not_found() -> None:
     """Map a missing user status to IntegrationError."""
+
     def handler(_: httpx.Request) -> httpx.Response:
         return httpx.Response(404)
 
@@ -289,6 +308,7 @@ def test_get_user_status_not_found() -> None:
 
 def test_get_user_status_transport_error() -> None:
     """Map status transport failures to IntegrationError."""
+
     def handler(_: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("connection failed")
 
@@ -301,6 +321,7 @@ def test_get_user_status_transport_error() -> None:
 
 def test_get_user_status_malformed_response() -> None:
     """Reject malformed status responses."""
+
     def handler(_: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,

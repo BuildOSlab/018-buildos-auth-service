@@ -16,6 +16,7 @@ class LogoutResult:
 
 
 class LogoutService:
+    # pylint: disable=too-few-public-methods
     """
     Orchestrates logout by revoking the supplied refresh token.
 

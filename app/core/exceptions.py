@@ -58,3 +58,19 @@ class IntegrationError(AuthServiceError):
 
 class UserAlreadyExistsError(AuthServiceError):
     """Raised when a user identity already exists."""
+
+
+# ============================================================================
+# 018 ↔ 019 integration specific exceptions
+# ============================================================================
+
+class ValidationError(IntegrationError):
+    """Raised when the User Service returns a validation error (422)."""
+
+
+class UserDeletedError(IntegrationError):
+    """Raised when the User Service indicates that the user is deleted (410)."""
+
+
+class IdempotencyConflictError(IntegrationError):
+    """Raised when an idempotency key was used with different data."""

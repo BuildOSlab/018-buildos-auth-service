@@ -5,6 +5,7 @@ Application Configuration
 
 from functools import lru_cache
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -39,6 +40,7 @@ class Settings(BaseSettings):
     max_failed_login_attempts: int = 5
     login_lockout_minutes: int = 15
     login_rate_limit_window_minutes: int = 15
+    internal_api_key: str = "change-me-in-production"
 
     # Password reset
     password_reset_expire_minutes: int = 30
@@ -48,6 +50,38 @@ class Settings(BaseSettings):
     user_service_api_key: str
     user_service_id: str = "buildos-auth-service"
     user_service_timeout: float = 5.0
+
+    # ------------------------------------------------------------------
+    # Validation
+    # ------------------------------------------------------------------
+
+    @model_validator(mode="after")
+    def validate_production_settings(self) -> "Settings":
+        """
+        Reject insecure configuration in production.
+        """
+
+        if self.environment.lower() != "production":
+            return self
+
+        placeholder = "change-me-in-production"
+
+        if self.internal_api_key == placeholder:
+            raise ValueError(
+                "Default internal_api_key used in production!"
+            )
+
+        if self.user_service_api_key == placeholder:
+            raise ValueError(
+                "Default user_service_api_key used in production!"
+            )
+
+        if not self.user_service_url.lower().startswith("https://"):
+            raise ValueError(
+                "user_service_url must use HTTPS in production"
+            )
+
+        return self
 
     model_config = SettingsConfigDict(
         env_file=".env",

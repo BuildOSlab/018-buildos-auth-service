@@ -24,6 +24,7 @@ class RegistrationResult:
 
 
 class RegistrationService:
+    # pylint: disable=too-few-public-methods
     """
     Orchestrates canonical user creation and authentication setup.
 
@@ -44,7 +45,7 @@ class RegistrationService:
         self.event_repository = event_repository
         self.token_service = token_service
 
-    def register(
+    def register( # pylint: disable=too-many-arguments,too-many-locals
         self,
         *,
         idempotency_key: str,
@@ -67,6 +68,11 @@ class RegistrationService:
         User creation is delegated to the User Service.
         Password hashing and authentication credential storage remain
         owned by the Auth Service.
+
+        Repeated requests using the same idempotency key may cause the
+        User Service to replay the existing canonical user. In that
+        case, existing authentication credentials must not be created
+        a second time.
         """
 
         user = self.user_service.create_user(
@@ -84,15 +90,20 @@ class RegistrationService:
 
         password_hash = hash_password(password)
 
-        try:
-            self.credential_repository.create(
-                user_id=user.user_id,
-                password_hash=password_hash,
-            )
-        except IntegrityError as exc:
-            raise IntegrationError(
-                "Authentication credentials already exist for this user.",
-            ) from exc
+        existing_credential = (
+            self.credential_repository.get_by_user_id(user.user_id)
+        )
+
+        if existing_credential is None:
+            try:
+                self.credential_repository.create(
+                    user_id=user.user_id,
+                    password_hash=password_hash,
+                )
+            except IntegrityError as exc:
+                raise IntegrationError(
+                    "Authentication credentials already exist for this user.",
+                ) from exc
 
         self.event_repository.create_auth_event(
             user_id=user.user_id,
@@ -113,4 +124,3 @@ class RegistrationService:
             user=user,
             tokens=tokens,
         )
-    
