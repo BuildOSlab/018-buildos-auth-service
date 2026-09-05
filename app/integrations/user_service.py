@@ -3,12 +3,14 @@ BuildOS Auth Service
 User Service Integration
 """
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Self
 from uuid import UUID
 
 import httpx
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 from app.core.config import get_settings
 from app.core.exceptions import (
@@ -19,6 +21,8 @@ from app.core.exceptions import (
     UserNotFoundError,
     ValidationError,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -220,6 +224,12 @@ class UserService:
 
         return None
 
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=5),
+        retry=retry_if_exception_type(httpx.HTTPError),
+        reraise=True,
+    )
     def resolve_identifier(
         self,
         *,
@@ -256,6 +266,10 @@ class UserService:
                 headers=self._headers(),
             )
         except httpx.HTTPError as exc:
+            logger.warning(
+                "User Service resolve_identifier failed (will retry): %s",
+                exc,
+            )
             raise IntegrationError(
                 "User Service transport failed.",
             ) from exc
@@ -294,7 +308,12 @@ class UserService:
                 "User Service returned an invalid identity response.",
             ) from exc
 
-
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=5),
+        retry=retry_if_exception_type(httpx.HTTPError),
+        reraise=True,
+    )
     def create_user(
         self,
         *,
@@ -356,6 +375,10 @@ class UserService:
                 headers=headers,
             )
         except httpx.HTTPError as exc:
+            logger.warning(
+                "User Service create_user failed (will retry): %s",
+                exc,
+            )
             raise IntegrationError(
                 "User Service transport failed.",
             ) from exc
@@ -476,6 +499,12 @@ class UserService:
             created_at=parsed_created_at,
         )
 
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=5),
+        retry=retry_if_exception_type(httpx.HTTPError),
+        reraise=True,
+    )
     def get_user_status(
         self,
         *,
@@ -493,6 +522,10 @@ class UserService:
                 headers=self._headers(),
             )
         except httpx.HTTPError as exc:
+            logger.warning(
+                "User Service get_user_status failed (will retry): %s",
+                exc,
+            )
             raise IntegrationError(
                 "User Service transport failed.",
             ) from exc
@@ -600,3 +633,4 @@ class UserService:
             status_changed_at=parsed_status_changed_at,
             verification=parsed_verification,
         )
+    
