@@ -46,7 +46,7 @@ def test_resolve_identifier_success() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.method == "POST"
         assert request.url.path == "/internal/v1/users/resolve"
-        assert request.headers["Authorization"].startswith("Bearer ")
+        assert request.headers["Authorization"] == service.api_key
         assert request.headers["X-Service-ID"] == "buildos-auth-service"
         assert json.loads(request.content) == {
             "identifier": "gerald.test001@example.com",

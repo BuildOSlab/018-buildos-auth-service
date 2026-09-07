@@ -10,7 +10,7 @@ from typing import Any, Self
 from uuid import UUID
 
 import httpx
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from app.core.config import get_settings
 from app.core.exceptions import (
@@ -88,7 +88,7 @@ class UserService:
     def _headers(self) -> dict[str, str]:
         """Build internal service authentication headers."""
         return {
-            "Authorization": f"Bearer {self.api_key}",
+            "Authorization": self.api_key,
             "X-Service-ID": self.service_id,
             "Accept": "application/json",
         }

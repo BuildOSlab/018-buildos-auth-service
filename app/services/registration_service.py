@@ -96,8 +96,8 @@ class RegistrationService:
                 timezone=timezone,
                 language=language,
             )
-        except Exception as exc:
-            logger.error("User Service call failed: %s", exc, exc_info=True)
+        except Exception:
+            logger.exception("User Service call failed")
             raise  # IntegrationError is already raised by UserService
 
         logger.info("User created: user_id=%s, public_id=%s", user.user_id, user.public_id)
@@ -124,10 +124,9 @@ class RegistrationService:
                 credential = self.credential_repository.get_by_user_id(user.user_id)
                 if credential is None:
                     # Unexpected: duplicate key but no record found?
-                    logger.error(
+                    logger.exception(
                         "IntegrityError occurred but no credential found for user_id=%s – re-raising",
                         user.user_id,
-                        exc_info=True,
                     )
                     raise IntegrationError(
                         "Authentication credentials already exist for this user, but could not be retrieved."
