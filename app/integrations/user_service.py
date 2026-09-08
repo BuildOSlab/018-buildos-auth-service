@@ -11,7 +11,13 @@ from typing import Any, Self
 from uuid import UUID
 
 import httpx
-from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+from tenacity import (
+    RetryCallState,
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 from app.core.config import get_settings
 from app.core.exceptions import (
@@ -299,11 +305,26 @@ class UserService:
 
         return None
 
+    @staticmethod
+    def _raise_integration_error(retry_state: RetryCallState) -> None:
+        """
+        Callback used by tenacity when all retries are exhausted.
+        Raises IntegrationError with the last exception.
+        """
+        outcome = retry_state.outcome
+        if outcome is None:
+            raise IntegrationError("User Service failed after retries")
+
+        last_exception = outcome.exception()
+        raise IntegrationError(
+            f"User Service failed after retries: {last_exception}"
+        ) from last_exception
+
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=1, max=5),
         retry=retry_if_exception_type((httpx.HTTPError, UserServiceRetryableError)),
-        reraise=True,
+        retry_error_callback=_raise_integration_error,
     )
     def resolve_identifier(
         self,
@@ -389,7 +410,7 @@ class UserService:
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=1, max=5),
         retry=retry_if_exception_type((httpx.HTTPError, UserServiceRetryableError)),
-        reraise=True,
+        retry_error_callback=_raise_integration_error,
     )
     def create_user(
         self,
@@ -586,7 +607,7 @@ class UserService:
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=1, max=5),
         retry=retry_if_exception_type((httpx.HTTPError, UserServiceRetryableError)),
-        reraise=True,
+        retry_error_callback=_raise_integration_error,
     )
     def get_user_status(
         self,
