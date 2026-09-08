@@ -11,13 +11,7 @@ from typing import Any, Self
 from uuid import UUID
 
 import httpx
-from tenacity import (
-    RetryCallState,
-    retry,
-    retry_if_exception_type,
-    stop_after_attempt,
-    wait_exponential,
-)
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from app.core.config import get_settings
 from app.core.exceptions import (
@@ -306,16 +300,12 @@ class UserService:
         return None
 
     @staticmethod
-    def _raise_integration_error(retry_state: RetryCallState) -> None:
+    def _raise_integration_error(retry_state) -> None:
         """
         Callback used by tenacity when all retries are exhausted.
         Raises IntegrationError with the last exception.
         """
-        outcome = retry_state.outcome
-        if outcome is None:
-            raise IntegrationError("User Service failed after retries")
-
-        last_exception = outcome.exception()
+        last_exception = retry_state.outcome.exception()
         raise IntegrationError(
             f"User Service failed after retries: {last_exception}"
         ) from last_exception
@@ -359,12 +349,11 @@ class UserService:
                 json=payload,
                 headers=self._headers(),
             )
+        # Let httpx.HTTPError propagate so tenacity can retry it
         except httpx.HTTPError as exc:
             duration_ms = (time.perf_counter() - start) * 1000
             self._log_transport_error("POST", url, duration_ms, exc)
-            raise IntegrationError(
-                "User Service transport failed.",
-            ) from exc
+            raise  # re-raise, tenacity will retry
 
         duration_ms = (time.perf_counter() - start) * 1000
         self._log_response("POST", url, response.status_code, duration_ms)
@@ -482,9 +471,7 @@ class UserService:
         except httpx.HTTPError as exc:
             duration_ms = (time.perf_counter() - start) * 1000
             self._log_transport_error("POST", url, duration_ms, exc)
-            raise IntegrationError(
-                "User Service transport failed.",
-            ) from exc
+            raise  # re-raise for tenacity to retry
 
         duration_ms = (time.perf_counter() - start) * 1000
         self._log_response("POST", url, response.status_code, duration_ms)
@@ -628,9 +615,7 @@ class UserService:
         except httpx.HTTPError as exc:
             duration_ms = (time.perf_counter() - start) * 1000
             self._log_transport_error("GET", url, duration_ms, exc)
-            raise IntegrationError(
-                "User Service transport failed.",
-            ) from exc
+            raise
 
         duration_ms = (time.perf_counter() - start) * 1000
         self._log_response("GET", url, response.status_code, duration_ms)
@@ -725,3 +710,4 @@ class UserService:
             status_changed_at=parsed_status_changed_at,
             verification=parsed_verification,
         )
+    
