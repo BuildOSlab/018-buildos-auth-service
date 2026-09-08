@@ -87,8 +87,23 @@ class UserService:
 
     def _headers(self) -> dict[str, str]:
         """Build internal service authentication headers."""
+        if not self.api_key:
+            raise IntegrationError(
+                "USER_SERVICE_API_KEY is not configured.",
+            )
+
+        if not self.service_id:
+            raise IntegrationError(
+                "USER_SERVICE_ID is not configured.",
+            )
+
+        # Prefer the standard Bearer format
+        auth_value = self.api_key
+        if not auth_value.lower().startswith("bearer "):
+            auth_value = f"Bearer {auth_value}"
+
         return {
-            "Authorization": self.api_key,
+            "Authorization": auth_value,
             "X-Service-ID": self.service_id,
             "Accept": "application/json",
         }
