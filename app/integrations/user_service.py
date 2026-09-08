@@ -163,6 +163,22 @@ class UserService:
             },
         )
 
+    def check_health(self, timeout: float = 3.0) -> bool:
+        """
+        Lightweight health check against the User Service.
+        Returns True if the service responds with HTTP 200.
+        """
+        url = f"{self.base_url}/health"
+        try:
+            response = self._client.get(
+                url,
+                headers=self._headers(),
+                timeout=timeout,
+            )
+            return response.status_code == 200
+        except httpx.HTTPError:
+            return False
+
     @staticmethod
     def _detect_identifier_type(identifier: str) -> str:
         """
@@ -413,7 +429,8 @@ class UserService:
         headers["Idempotency-Key"] = normalized_idempotency_key
 
         # Truncate idempotency key in logs for safety
-        safe_key = normalized_idempotency_key[:16] + "..." if len(normalized_idempotency_key) > 16 else normalized_idempotency_key
+        safe_key = normalized_idempotency_key[:16] + "..." if len(
+            normalized_idempotency_key) > 16 else normalized_idempotency_key
 
         self._log_request(
             "POST",
@@ -665,4 +682,3 @@ class UserService:
             status_changed_at=parsed_status_changed_at,
             verification=parsed_verification,
         )
-    

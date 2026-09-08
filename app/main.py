@@ -5,6 +5,7 @@ Application Entry Point
 
 from fastapi import FastAPI
 
+from app.api.health import router as health_router
 from app.api.v1 import auth, password, security, token
 from app.core.config import settings
 from app.core.logging import configure_logging
@@ -12,7 +13,7 @@ from app.core.rate_limit import setup_rate_limiting
 
 
 def create_application() -> FastAPI:
-    """
+    """s
     Create and configure the FastAPI application.
     """
 
@@ -26,6 +27,9 @@ def create_application() -> FastAPI:
         version="0.1.0",
         debug=settings.debug,
     )
+
+    # Health & readiness (no prefix)
+    application.include_router(health_router)
 
     application.include_router(
         auth.router,
@@ -50,20 +54,6 @@ def create_application() -> FastAPI:
         prefix="/api/v1/token",
         tags=["token"],
     )
-
-    @application.get(
-        "/health",
-        tags=["health"],
-    )
-    def health_check() -> dict[str, str]:
-        """
-        Basic service health check.
-        """
-
-        return {
-            "status": "ok",
-            "service": settings.service_name,
-        }
 
     return application
 

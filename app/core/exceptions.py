@@ -74,3 +74,7 @@ class UserDeletedError(IntegrationError):
 
 class IdempotencyConflictError(IntegrationError):
     """Raised when an idempotency key was used with different data."""
+
+
+class ServiceUnavailableError(IntegrationError):
+    """Raised when a dependent service is temporarily unavailable (circuit open)."""
