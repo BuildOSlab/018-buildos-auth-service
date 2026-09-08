@@ -4,6 +4,7 @@ User Service Integration
 """
 
 import logging
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Self
@@ -108,6 +109,60 @@ class UserService:
             "Accept": "application/json",
         }
 
+    def _log_request(self, method: str, url: str, **extra: Any) -> None:
+        logger.info(
+            "User Service request",
+            extra={
+                "event": "user_service_request",
+                "method": method,
+                "url": url,
+                "service_id": self.service_id,
+                **extra,
+            },
+        )
+
+    def _log_response(
+        self,
+        method: str,
+        url: str,
+        status_code: int,
+        duration_ms: float,
+        **extra: Any,
+    ) -> None:
+        level = logging.INFO if status_code < 400 else logging.WARNING
+        logger.log(
+            level,
+            "User Service response",
+            extra={
+                "event": "user_service_response",
+                "method": method,
+                "url": url,
+                "status_code": status_code,
+                "duration_ms": round(duration_ms, 1),
+                "service_id": self.service_id,
+                **extra,
+            },
+        )
+
+    def _log_transport_error(
+        self,
+        method: str,
+        url: str,
+        duration_ms: float,
+        error: Exception,
+    ) -> None:
+        logger.warning(
+            "User Service transport error",
+            extra={
+                "event": "user_service_transport_error",
+                "method": method,
+                "url": url,
+                "duration_ms": round(duration_ms, 1),
+                "error": str(error),
+                "service_id": self.service_id,
+            },
+        )
+
     @staticmethod
     def _detect_identifier_type(identifier: str) -> str:
         """
@@ -176,20 +231,6 @@ class UserService:
         """
         Extract a structured error payload when the User Service
         returns one.
-
-        Supports responses such as:
-
-        {
-            "detail": {
-                "code": "IDENTITY_ALREADY_EXISTS"
-            }
-        }
-
-        and:
-
-        {
-            "code": "IDENTITY_ALREADY_EXISTS"
-        }
         """
         try:
             payload = response.json()
@@ -234,7 +275,6 @@ class UserService:
                 return str(detail)
 
         except (ValueError, AttributeError, TypeError):
-            # Response is not JSON or has an unexpected structure.
             pass
 
         return None
@@ -255,18 +295,13 @@ class UserService:
 
         Returns None when the identity does not exist or has been
         deleted and is therefore no longer resolvable.
-
-        Raises specific exceptions for other error conditions.
         """
         normalized_identifier = identifier.strip()
 
         if not normalized_identifier:
             return None
 
-        identity_type = self._detect_identifier_type(
-            normalized_identifier,
-        )
-
+        identity_type = self._detect_identifier_type(normalized_identifier)
         url = f"{self.base_url}/internal/v1/users/resolve"
 
         payload = {
@@ -274,6 +309,9 @@ class UserService:
             "type": identity_type,
         }
 
+        self._log_request("POST", url, identity_type=identity_type)
+
+        start = time.perf_counter()
         try:
             response = self._client.post(
                 url,
@@ -281,25 +319,23 @@ class UserService:
                 headers=self._headers(),
             )
         except httpx.HTTPError as exc:
-            logger.warning(
-                "User Service resolve_identifier failed (will retry): %s",
-                exc,
-            )
+            duration_ms = (time.perf_counter() - start) * 1000
+            self._log_transport_error("POST", url, duration_ms, exc)
             raise IntegrationError(
                 "User Service transport failed.",
             ) from exc
 
+        duration_ms = (time.perf_counter() - start) * 1000
+        self._log_response("POST", url, response.status_code, duration_ms)
+
         error_detail = self._parse_error_detail(response)
 
-        # A missing or deleted identity is intentionally treated as
-        # unresolved at the authentication boundary.
         if response.status_code in {404, 410}:
             return None
 
         if response.status_code == 422:
             raise ValidationError(
-                error_detail
-                or "Validation error in identifier resolution.",
+                error_detail or "Validation error in identifier resolution.",
             )
 
         if response.status_code != 200:
@@ -351,16 +387,9 @@ class UserService:
                 "User creation requires an idempotency key.",
             )
 
-        identities = (
-            email,
-            phone,
-            username,
-        )
+        identities = (email, phone, username)
 
-        if not any(
-            value is not None and value.strip()
-            for value in identities
-        ):
+        if not any(value is not None and value.strip() for value in identities):
             raise ValidationError(
                 "User creation requires at least one identity.",
             )
@@ -383,6 +412,19 @@ class UserService:
         headers["Content-Type"] = "application/json"
         headers["Idempotency-Key"] = normalized_idempotency_key
 
+        # Truncate idempotency key in logs for safety
+        safe_key = normalized_idempotency_key[:16] + "..." if len(normalized_idempotency_key) > 16 else normalized_idempotency_key
+
+        self._log_request(
+            "POST",
+            url,
+            idempotency_key=safe_key,
+            has_email=bool(email),
+            has_phone=bool(phone),
+            has_username=bool(username),
+        )
+
+        start = time.perf_counter()
         try:
             response = self._client.post(
                 url,
@@ -390,13 +432,14 @@ class UserService:
                 headers=headers,
             )
         except httpx.HTTPError as exc:
-            logger.warning(
-                "User Service create_user failed (will retry): %s",
-                exc,
-            )
+            duration_ms = (time.perf_counter() - start) * 1000
+            self._log_transport_error("POST", url, duration_ms, exc)
             raise IntegrationError(
                 "User Service transport failed.",
             ) from exc
+
+        duration_ms = (time.perf_counter() - start) * 1000
+        self._log_response("POST", url, response.status_code, duration_ms)
 
         error_detail = self._parse_error_detail(response)
 
@@ -406,42 +449,28 @@ class UserService:
 
             if error_code == "IDENTITY_ALREADY_EXISTS":
                 if email is not None and email.strip():
-                    message = (
-                        "An account with this email already exists."
-                    )
+                    message = "An account with this email already exists."
                 elif phone is not None and phone.strip():
-                    message = (
-                        "An account with this phone number already exists."
-                    )
+                    message = "An account with this phone number already exists."
                 elif username is not None and username.strip():
-                    message = (
-                        "An account with this username already exists."
-                    )
+                    message = "An account with this username already exists."
                 else:
-                    message = (
-                        "An account with this identity already exists."
-                    )
+                    message = "An account with this identity already exists."
 
                 raise UserAlreadyExistsError(message)
 
             if error_code == "IDEMPOTENCY_CONFLICT":
                 raise IdempotencyConflictError(
-                    error_detail
-                    or "Idempotency key was used with different data.",
+                    error_detail or "Idempotency key was used with different data.",
                 )
 
-            if (
-                error_detail is not None
-                and "idempotency" in error_detail.lower()
-            ):
+            if error_detail is not None and "idempotency" in error_detail.lower():
                 raise IdempotencyConflictError(
-                    error_detail
-                    or "Idempotency key was used with different data.",
+                    error_detail or "Idempotency key was used with different data.",
                 )
 
             raise UserAlreadyExistsError(
-                error_detail
-                or "An account with this identity already exists.",
+                error_detail or "An account with this identity already exists.",
             )
 
         if response.status_code == 422:
@@ -456,8 +485,7 @@ class UserService:
 
         if response.status_code == 410:
             raise UserDeletedError(
-                error_detail
-                or "User account has been deleted.",
+                error_detail or "User account has been deleted.",
             )
 
         if response.status_code not in {200, 201}:
@@ -477,17 +505,14 @@ class UserService:
             raise IntegrationError(
                 "User Service returned an invalid user creation response.",
             )
-
         if not isinstance(public_id, str):
             raise IntegrationError(
                 "User Service returned an invalid user creation response.",
             )
-
         if not isinstance(user_status, str):
             raise IntegrationError(
                 "User Service returned an invalid user creation response.",
             )
-
         if not isinstance(created_at, str):
             raise IntegrationError(
                 "User Service returned an invalid user creation response.",
@@ -506,6 +531,16 @@ class UserService:
             raise IntegrationError(
                 "User Service returned an invalid user creation response.",
             ) from exc
+
+        logger.info(
+            "User created successfully via User Service",
+            extra={
+                "event": "user_service_user_created",
+                "user_id": str(parsed_user_id),
+                "public_id": public_id,
+                "status": user_status,
+            },
+        )
 
         return CreatedUser(
             user_id=parsed_user_id,
@@ -526,24 +561,25 @@ class UserService:
         user_id: UUID,
     ) -> UserStatus:
         """Retrieve canonical user status from the User Service."""
-        url = (
-            f"{self.base_url}/internal/v1/users/"
-            f"{user_id}/status"
-        )
+        url = f"{self.base_url}/internal/v1/users/{user_id}/status"
 
+        self._log_request("GET", url, user_id=str(user_id))
+
+        start = time.perf_counter()
         try:
             response = self._client.get(
                 url,
                 headers=self._headers(),
             )
         except httpx.HTTPError as exc:
-            logger.warning(
-                "User Service get_user_status failed (will retry): %s",
-                exc,
-            )
+            duration_ms = (time.perf_counter() - start) * 1000
+            self._log_transport_error("GET", url, duration_ms, exc)
             raise IntegrationError(
                 "User Service transport failed.",
             ) from exc
+
+        duration_ms = (time.perf_counter() - start) * 1000
+        self._log_response("GET", url, response.status_code, duration_ms)
 
         error_detail = self._parse_error_detail(response)
 
@@ -554,14 +590,12 @@ class UserService:
 
         if response.status_code == 410:
             raise UserDeletedError(
-                error_detail
-                or "User account has been deleted.",
+                error_detail or "User account has been deleted.",
             )
 
         if response.status_code == 422:
             raise ValidationError(
-                error_detail
-                or "Validation error in status request.",
+                error_detail or "Validation error in status request.",
             )
 
         if response.status_code != 200:
@@ -582,53 +616,36 @@ class UserService:
             raise IntegrationError(
                 "User Service returned an invalid status response.",
             )
-
         if not isinstance(user_status, str):
             raise IntegrationError(
                 "User Service returned an invalid status response.",
             )
-
         if not isinstance(is_active, bool):
             raise IntegrationError(
                 "User Service returned an invalid status response.",
             )
-
-        if verification is not None and not isinstance(
-            verification,
-            dict,
-        ):
+        if verification is not None and not isinstance(verification, dict):
             raise IntegrationError(
                 "User Service returned an invalid status response.",
             )
 
         parsed_verification: dict[str, str] = {}
-
         if isinstance(verification, dict):
             for key, value in verification.items():
-                if not isinstance(key, str):
+                if not isinstance(key, str) or not isinstance(value, str):
                     raise IntegrationError(
                         "User Service returned an invalid status response.",
                     )
-
-                if not isinstance(value, str):
-                    raise IntegrationError(
-                        "User Service returned an invalid status response.",
-                    )
-
                 parsed_verification[key] = value
 
         parsed_status_changed_at: datetime | None = None
-
         if status_changed_at is not None:
             if not isinstance(status_changed_at, str):
                 raise IntegrationError(
                     "User Service returned an invalid status response.",
                 )
-
             try:
-                parsed_status_changed_at = datetime.fromisoformat(
-                    status_changed_at,
-                )
+                parsed_status_changed_at = datetime.fromisoformat(status_changed_at)
             except ValueError as exc:
                 raise IntegrationError(
                     "User Service returned an invalid status response.",
