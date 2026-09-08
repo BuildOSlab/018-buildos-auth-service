@@ -300,7 +300,7 @@ class UserService:
         return None
 
     @staticmethod
-    def _raise_integration_error(retry_state) -> None:
+    def _raise_integration_error(retry_state: Any) -> None:
         """
         Callback used by tenacity when all retries are exhausted.
         Raises IntegrationError with the last exception.
