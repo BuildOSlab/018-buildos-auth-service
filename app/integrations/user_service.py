@@ -26,6 +26,10 @@ from app.core.exceptions import (
 logger = logging.getLogger(__name__)
 
 
+class UserServiceRetryableError(Exception):
+    """Raised when the User Service returns a retryable HTTP error (5xx or 429)."""
+
+
 @dataclass(frozen=True)
 class CreatedUser:
     """Canonical user created by the User Service."""
@@ -298,7 +302,7 @@ class UserService:
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=1, max=5),
-        retry=retry_if_exception_type(httpx.HTTPError),
+        retry=retry_if_exception_type((httpx.HTTPError, UserServiceRetryableError)),
         reraise=True,
     )
     def resolve_identifier(
@@ -344,6 +348,12 @@ class UserService:
         duration_ms = (time.perf_counter() - start) * 1000
         self._log_response("POST", url, response.status_code, duration_ms)
 
+        # Retry on server errors or rate limiting
+        if response.status_code >= 500 or response.status_code == 429:
+            raise UserServiceRetryableError(
+                f"Retryable error from User Service: {response.status_code}"
+            )
+
         error_detail = self._parse_error_detail(response)
 
         if response.status_code in {404, 410}:
@@ -378,7 +388,7 @@ class UserService:
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=1, max=5),
-        retry=retry_if_exception_type(httpx.HTTPError),
+        retry=retry_if_exception_type((httpx.HTTPError, UserServiceRetryableError)),
         reraise=True,
     )
     def create_user(
@@ -457,6 +467,12 @@ class UserService:
 
         duration_ms = (time.perf_counter() - start) * 1000
         self._log_response("POST", url, response.status_code, duration_ms)
+
+        # Retry on server errors or rate limiting
+        if response.status_code >= 500 or response.status_code == 429:
+            raise UserServiceRetryableError(
+                f"Retryable error from User Service: {response.status_code}"
+            )
 
         error_detail = self._parse_error_detail(response)
 
@@ -569,7 +585,7 @@ class UserService:
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=1, max=5),
-        retry=retry_if_exception_type(httpx.HTTPError),
+        retry=retry_if_exception_type((httpx.HTTPError, UserServiceRetryableError)),
         reraise=True,
     )
     def get_user_status(
@@ -597,6 +613,12 @@ class UserService:
 
         duration_ms = (time.perf_counter() - start) * 1000
         self._log_response("GET", url, response.status_code, duration_ms)
+
+        # Retry on server errors or rate limiting
+        if response.status_code >= 500 or response.status_code == 429:
+            raise UserServiceRetryableError(
+                f"Retryable error from User Service: {response.status_code}"
+            )
 
         error_detail = self._parse_error_detail(response)
 
