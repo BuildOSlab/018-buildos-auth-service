@@ -8,7 +8,11 @@ from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
-from app.api.dependencies import get_login_service, get_token_service
+from app.api.dependencies import (
+    get_login_service,
+    get_session_service,
+    get_token_service,
+)
 from app.core.exceptions import IntegrationError, InvalidCredentialsError
 from app.main import app
 from app.services.authentication_service import AuthenticationResult
@@ -38,17 +42,21 @@ def build_token_pair() -> TokenPair:
 
 
 def test_login_success() -> None:
+    """Return tokens and create a session for valid credentials."""
     login_service = Mock()
     token_service = Mock()
+    session_service = Mock()
 
     result = build_authenticated_result()
     token_pair = build_token_pair()
 
     login_service.login.return_value = result
     token_service.issue_tokens.return_value = token_pair
+    session_service.create_session.return_value = uuid4()
 
     app.dependency_overrides[get_login_service] = lambda: login_service
     app.dependency_overrides[get_token_service] = lambda: token_service
+    app.dependency_overrides[get_session_service] = lambda: session_service
 
     try:
         client = TestClient(app)
@@ -84,11 +92,81 @@ def test_login_success() -> None:
             ip_address="testclient",
             user_agent="testclient",
         )
+
+        session_service.create_session.assert_called_once()
+        args = session_service.create_session.call_args.kwargs
+        assert args["user_id"] == result.authentication.user_id
+        assert str(args["device_id"])
+        assert args["expires_at"] is not None
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_login_without_device_id_generates_uuid() -> None:
+    """Generate a device UUID when the login request omits one."""
+    login_service = Mock()
+    token_service = Mock()
+    session_service = Mock()
+
+    login_service.login.return_value = build_authenticated_result()
+    token_service.issue_tokens.return_value = build_token_pair()
+    session_service.create_session.return_value = uuid4()
+
+    app.dependency_overrides[get_login_service] = lambda: login_service
+    app.dependency_overrides[get_token_service] = lambda: token_service
+    app.dependency_overrides[get_session_service] = lambda: session_service
+
+    try:
+        client = TestClient(app)
+        response = client.post(
+            "/api/v1/auth/login",
+            json={
+                "identifier": "user@example.com",
+                "password": "correct-password",
+            },
+        )
+
+        assert response.status_code == 200
+        session_service.create_session.assert_called_once()
+        assert str(session_service.create_session.call_args.kwargs["device_id"])
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_login_with_device_id_uses_provided_value() -> None:
+    """Use the device UUID supplied by the login request."""
+    login_service = Mock()
+    token_service = Mock()
+    session_service = Mock()
+    device_id = uuid4()
+
+    login_service.login.return_value = build_authenticated_result()
+    token_service.issue_tokens.return_value = build_token_pair()
+    session_service.create_session.return_value = uuid4()
+
+    app.dependency_overrides[get_login_service] = lambda: login_service
+    app.dependency_overrides[get_token_service] = lambda: token_service
+    app.dependency_overrides[get_session_service] = lambda: session_service
+
+    try:
+        client = TestClient(app)
+        response = client.post(
+            "/api/v1/auth/login",
+            json={
+                "identifier": "user@example.com",
+                "password": "correct-password",
+                "device_id": str(device_id),
+            },
+        )
+
+        assert response.status_code == 200
+        assert session_service.create_session.call_args.kwargs["device_id"] == device_id
     finally:
         app.dependency_overrides.clear()
 
 
 def test_login_invalid_credentials_returns_401() -> None:
+    """Return 401 when authentication rejects the credentials."""
     login_service = Mock()
     login_service.login.side_effect = InvalidCredentialsError(
         "Invalid credentials.",
@@ -116,6 +194,7 @@ def test_login_invalid_credentials_returns_401() -> None:
 
 
 def test_login_user_service_unavailable_returns_503() -> None:
+    """Return 503 when the User Service integration is unavailable."""
     login_service = Mock()
     login_service.login.side_effect = IntegrationError(
         "User Service integration transport is not configured.",
@@ -143,6 +222,7 @@ def test_login_user_service_unavailable_returns_503() -> None:
 
 
 def test_login_rejects_missing_identifier() -> None:
+    """Reject login requests that omit the identifier."""
     login_service = Mock()
 
     app.dependency_overrides[get_login_service] = lambda: login_service
@@ -164,6 +244,7 @@ def test_login_rejects_missing_identifier() -> None:
 
 
 def test_login_rejects_missing_password() -> None:
+    """Reject login requests that omit the password."""
     login_service = Mock()
 
     app.dependency_overrides[get_login_service] = lambda: login_service
@@ -185,6 +266,7 @@ def test_login_rejects_missing_password() -> None:
 
 
 def test_login_rejects_empty_identifier() -> None:
+    """Reject login requests with an empty identifier."""
     login_service = Mock()
 
     app.dependency_overrides[get_login_service] = lambda: login_service
@@ -207,6 +289,7 @@ def test_login_rejects_empty_identifier() -> None:
 
 
 def test_login_rejects_empty_password() -> None:
+    """Reject login requests with an empty password."""
     login_service = Mock()
 
     app.dependency_overrides[get_login_service] = lambda: login_service
@@ -229,6 +312,7 @@ def test_login_rejects_empty_password() -> None:
 
 
 def test_login_rejects_unknown_fields() -> None:
+    """Reject login requests containing unexpected fields."""
     login_service = Mock()
 
     app.dependency_overrides[get_login_service] = lambda: login_service
