@@ -99,6 +99,8 @@ class LoginRequest(BaseModel):
         max_length=1024,
     )
 
+    device_id: UUID | None = None
+
 
 class LoginResponse(BaseModel):
     """Authentication result returned after successful login."""

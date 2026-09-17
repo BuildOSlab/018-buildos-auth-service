@@ -3,15 +3,20 @@ BuildOS Auth Service
 Authentication API
 """
 
+from datetime import UTC, datetime, timedelta
+from uuid import uuid4
+
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from app.api.dependencies import (
     LoginServiceDependency,
     LogoutServiceDependency,
     RegistrationServiceDependency,
+    SessionServiceDependency,
     TokenServiceDependency,
     get_user_service,
 )
+from app.core.config import get_settings
 from app.core.exceptions import (
     AuthenticationError,
     ExpiredTokenError,
@@ -123,6 +128,7 @@ def login(
     request: Request,  # pylint: disable=unused-argument
     login_service: LoginServiceDependency,
     token_service: TokenServiceDependency,
+    session_service: SessionServiceDependency,
 ) -> LoginResponse:
     """
     Authenticate a BuildOS user.
@@ -177,6 +183,24 @@ def login(
         ),
         user_agent=request.headers.get("user-agent"),
     )
+
+    device_id = payload.device_id or uuid4()
+    settings = get_settings()
+    expires_at = datetime.now(UTC) + timedelta(
+        minutes=settings.access_token_expire_minutes,
+    )
+
+    try:
+        session_service.create_session(
+            user_id=user_id,
+            device_id=device_id,
+            expires_at=expires_at,
+        )
+    except IntegrationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Session service is unavailable.",
+        ) from exc
 
     return LoginResponse(
         authenticated=True,

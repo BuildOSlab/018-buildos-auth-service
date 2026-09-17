@@ -14,6 +14,7 @@ from app.core.config import get_settings
 from app.core.constants import CONTEXT_PERSONAL
 from app.core.exceptions import ExpiredTokenError, InvalidTokenError
 from app.database.dependencies import get_db
+from app.integrations.session_service import SessionService
 from app.integrations.user_service import UserService
 from app.repositories.credential_repository import CredentialRepository
 from app.repositories.event_repository import EventRepository
@@ -92,6 +93,22 @@ def get_user_service() -> UserService:
     Provide the canonical User Service integration.
     """
     return UserService()
+
+
+# ------------------------------------------------------------------
+# Session Service
+# ------------------------------------------------------------------
+
+
+def get_session_service() -> SessionService:
+    """Provide the internal Session Service integration."""
+    return SessionService()
+
+
+SessionServiceDependency = Annotated[
+    SessionService,
+    Depends(get_session_service),
+]
 
 
 # ------------------------------------------------------------------

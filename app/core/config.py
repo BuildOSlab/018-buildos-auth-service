@@ -51,6 +51,12 @@ class Settings(BaseSettings):
     user_service_id: str = "buildos-auth-service"
     user_service_timeout: float = 5.0
 
+    # Session Service integration
+    session_service_url: str
+    session_service_api_key: str
+    session_service_id: str = "buildos-auth-service"
+    session_service_timeout: float = 5.0
+
     # ------------------------------------------------------------------
     # Validation
     # ------------------------------------------------------------------
@@ -76,9 +82,19 @@ class Settings(BaseSettings):
                 "Default user_service_api_key used in production!"
             )
 
+        if self.session_service_api_key == placeholder:
+            raise ValueError(
+                "Default session_service_api_key used in production!"
+            )
+
         if not self.user_service_url.lower().startswith("https://"):
             raise ValueError(
                 "user_service_url must use HTTPS in production"
+            )
+
+        if not self.session_service_url.lower().startswith("https://"):
+            raise ValueError(
+                "session_service_url must use HTTPS in production"
             )
 
         return self

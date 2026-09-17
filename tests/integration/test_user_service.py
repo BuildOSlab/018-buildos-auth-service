@@ -46,7 +46,7 @@ def test_resolve_identifier_success() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.method == "POST"
         assert request.url.path == "/internal/v1/users/resolve"
-        assert request.headers["Authorization"] == service.api_key
+        assert request.headers["Authorization"] == f"Bearer {service.api_key}"
         assert request.headers["X-Service-ID"] == "buildos-auth-service"
         assert json.loads(request.content) == {
             "identifier": "gerald.test001@example.com",
@@ -130,7 +130,7 @@ def test_resolve_identifier_transport_error() -> None:
 
     with make_service(make_transport(handler)) as service, pytest.raises(
         IntegrationError,
-        match="User Service transport failed",
+        match="User Service failed after retries",
     ):
         service.resolve_identifier(
             identifier="gerald.test001@example.com",
@@ -148,7 +148,7 @@ def test_resolve_identifier_unexpected_status() -> None:
 
     with make_service(make_transport(handler)) as service, pytest.raises(
         IntegrationError,
-        match="failed to resolve the user identity",
+        match="User Service failed after retries",
     ):
         service.resolve_identifier(
             identifier="gerald.test001@example.com",
@@ -314,7 +314,7 @@ def test_get_user_status_transport_error() -> None:
 
     with make_service(make_transport(handler)) as service, pytest.raises(
         IntegrationError,
-        match="User Service transport failed",
+        match="User Service failed after retries",
     ):
         service.get_user_status(user_id=TEST_USER_ID)
 
