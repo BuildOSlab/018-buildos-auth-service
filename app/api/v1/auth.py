@@ -13,6 +13,7 @@ from app.api.dependencies import (
     LogoutServiceDependency,
     RegistrationServiceDependency,
     SessionServiceDependency,
+    CurrentUserContextDependency,
     TokenServiceDependency,
     get_user_service,
 )
@@ -40,7 +41,11 @@ from app.schemas.auth import (
     RegisterRequest,
     RegisterResponse,
 )
-from app.schemas.token import TokenRefreshRequest, TokenRevokeResponse
+from app.schemas.token import (
+    TokenMeResponse,
+    TokenRefreshRequest,
+    TokenRevokeResponse,
+)
 
 router = APIRouter()
 
@@ -208,6 +213,27 @@ def login(
         access_token=token_pair.access_token,
         refresh_token=token_pair.refresh_token,
         token_type=token_pair.token_type,
+    )
+
+
+@router.get(
+    "/me",
+    response_model=TokenMeResponse,
+    status_code=status.HTTP_200_OK,
+)
+def me(
+    current_user: CurrentUserContextDependency,
+) -> TokenMeResponse:
+    """
+    Resolve the authenticated identity from the access token.
+    """
+
+    return TokenMeResponse(
+        authenticated=True,
+        user_id=current_user.user_id,
+        context_type=current_user.context_type,
+        organization_id=current_user.organization_id,
+        membership_id=current_user.membership_id,
     )
 
 

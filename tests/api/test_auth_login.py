@@ -9,6 +9,7 @@ from uuid import uuid4
 from fastapi.testclient import TestClient
 
 from app.api.dependencies import (
+    get_current_user_context,
     get_login_service,
     get_session_service,
     get_token_service,
@@ -18,6 +19,7 @@ from app.main import app
 from app.services.authentication_service import AuthenticationResult
 from app.services.login_service import LoginResult
 from app.services.token_service import TokenPair
+from app.schemas.token import TokenUserContext
 
 
 def build_authenticated_result() -> LoginResult:
@@ -331,5 +333,38 @@ def test_login_rejects_unknown_fields() -> None:
 
         assert response.status_code == 422
         login_service.login.assert_not_called()
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_me_returns_authenticated_user_context() -> None:
+    """Return the authenticated identity resolved from the access token."""
+    user_id = uuid4()
+    organization_id = uuid4()
+    membership_id = uuid4()
+
+    app.dependency_overrides[get_current_user_context] = lambda: TokenUserContext(
+        user_id=user_id,
+        context_type="PERSONAL",
+        organization_id=organization_id,
+        membership_id=membership_id,
+    )
+
+    try:
+        client = TestClient(app)
+
+        response = client.get(
+            "/api/v1/auth/me",
+            headers={"Authorization": "Bearer test-access-token"},
+        )
+
+        assert response.status_code == 200
+        assert response.json() == {
+            "authenticated": True,
+            "user_id": str(user_id),
+            "context_type": "PERSONAL",
+            "organization_id": str(organization_id),
+            "membership_id": str(membership_id),
+        }
     finally:
         app.dependency_overrides.clear()

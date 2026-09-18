@@ -67,3 +67,17 @@ class TokenUserContext(BaseModel):
     context_type: str = "PERSONAL"
     organization_id: UUID | None = None
     membership_id: UUID | None = None
+
+
+class TokenMeResponse(BaseModel):
+    """
+    Authenticated identity resolved from an access token.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    authenticated: bool = True
+    user_id: UUID
+    context_type: str = "PERSONAL"
+    organization_id: UUID | None = None
+    membership_id: UUID | None = None
